@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up Claude.ai projects and conversations to local disk
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/guido/projects/claude-web-backup
+EnvironmentFile=/home/guido/projects/claude-web-backup/.env.backup
+ExecStart=/home/guido/.local/bin/uv run claude-backup
