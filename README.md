@@ -119,6 +119,14 @@ uv run ruff check --fix .   # lint
 uv run pytest tests/ -v     # tests
 ```
 
-`claude-client` is a path dependency (see `[tool.uv.sources]` in `pyproject.toml`). After
-changing its source, `uv sync` alone won't always pick up the new code in this project's
-venv — run `uv sync --reinstall-package claude-client` to force it.
+`claude-client` and `logger` are path dependencies (see `[tool.uv.sources]` in
+`pyproject.toml`). After changing their source, `uv sync` alone won't always pick up the
+new code in this project's venv — run
+`uv sync --reinstall-package claude-client --reinstall-package logger` to force it.
+
+**Careful with reinstalls of internal deps.** A reinstall pulls in whatever the sibling
+repos currently have on disk, which may be newer (or broken) relative to what this backup
+was written against. `uv run` and the systemd service only pick up reinstalled code after
+a sync, so a stale venv is the *safe* failure mode. If you reinstall, verify a manual
+`uv run claude-backup` afterwards — don't let a fresh reinstall run silently into the
+nightly timer without checking the logs.
