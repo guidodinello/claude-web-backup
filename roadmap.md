@@ -15,3 +15,11 @@
 - **Token auto-refresh.** Session tokens expire after some weeks; today that's handled by
   failing loudly (non-zero exit + notify-send) and requiring a manual token re-paste into
   `.env.backup`. Could investigate refresh-token flows if the unofficial API exposes one.
+- **Revisit coupling when `claude-client` lands its tracked pull improvements.** When
+  `claude-client` ships the manifest-based network-incremental pull (tracked in
+  `claude-client/docs/bugs/pull-re-fetches-unchanged-content.md`), re-verify the backup
+  behavior documented here: the manifest skip changes "web is source of truth" semantics
+  (a local edit won't be overwritten when the web hasn't changed), and `pull_all` may
+  gain statuses worth surfacing in the per-account report. The progress-bar consolidation
+  (`docs/bugs/pull-progress-bars-accumulate.md`) is cosmetic — a sanity check under
+  systemd is all that's needed.
