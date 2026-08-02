@@ -84,6 +84,7 @@ def test_backup_account_maps_successful_projects_to_report(mock_client_cls, tmp_
     assert sorted(report.backed_up) == ["personal/Project A", "personal/Project B"]
     assert report.failures == []
     mock_client_cls.assert_called_once_with(TOKEN)
+    mock_client_cls.return_value.projects.pull_all.assert_called_once_with(tmp_path / "personal")
 
 
 @patch("claude_web_backup.backup.ClaudeClient")
@@ -106,6 +107,19 @@ def test_backup_account_records_auth_error_as_account_failure(mock_client_cls, t
     assert not report.ok
     assert report.backed_up == []
     assert any("personal" in f for f in report.failures)
+
+
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_records_unexpected_error_as_account_failure(mock_client_cls, tmp_path):
+    client = _mock_client()
+    client.projects.pull_all.side_effect = OSError("disk full")
+    mock_client_cls.return_value = client
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert not report.ok
+    assert report.backed_up == []
+    assert report.failures == ["personal: disk full"]
 
 
 @patch("claude_web_backup.backup.ClaudeClient")

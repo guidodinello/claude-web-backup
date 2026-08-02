@@ -66,6 +66,10 @@ def backup_account(account: Account, out_root: str | Path) -> BackupReport:
         logger.error("Account '%s': auth failed: %s", account.slug, exc)
         report.failures.append(f"{account.slug}: {exc}")
         return report
+    except Exception as exc:
+        logger.exception("Account '%s': backup failed: %s", account.slug, exc)
+        report.failures.append(f"{account.slug}: {exc}")
+        return report
 
     if not results:
         logger.warning("Account '%s': no projects found in any chat-capable org", account.slug)
