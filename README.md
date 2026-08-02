@@ -3,9 +3,9 @@
 A local, automatic nightly backup of Claude.ai projects and their conversations, so
 web-side data is never the single point of failure.
 
-Depends on [`claude-client`](../claude-client) (a sibling project, path dependency) for
-all Claude.ai API access — this project is just the orchestration, config, and
-scheduling on top of it.
+Depends on [`claude-client`](https://github.com/guidodinello/claude-client) (a sibling
+project, local path dependency) for all Claude.ai API access — this project is just the
+orchestration, config, and scheduling on top of it.
 
 ## What it reuses from claude-client
 
