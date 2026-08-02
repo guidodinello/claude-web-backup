@@ -9,7 +9,7 @@ scheduling on top of it.
 
 ## What it reuses from claude-client
 
-- `ClaudeClient.export_all_projects_to_dir(out_dir)` — exports every project across every
+- `ClaudeClient.projects.pull_all(out_dir)` — pulls every project across every
   chat-capable org on an account in one call. Per project it writes:
   `project.md` (name, description, instructions, memory, controls), `docs/` (one file per
   knowledge doc), `conversations/` (one file per conversation). It **overwrites but never

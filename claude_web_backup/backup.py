@@ -7,10 +7,9 @@ Env-driven so it runs unattended (systemd timer, cron, etc.):
 - ``CLAUDE_BACKUP_DIR`` — output root (default ``./claude-backup``).
 
 Layout written: ``{out}/{account_slug}/{project_slug}/{project.md,docs/,conversations/}``.
-Mirrors ``export_project_to_dir`` semantics — it overwrites but never deletes, so the
-backup only ever grows. A failing account or project is logged and skipped rather than
-aborting the whole run, but any failure makes the process exit non-zero: a silent
-backup is worse than none.
+Mirrors ``pull_all`` semantics — it overwrites but never deletes, so the backup only ever
+grows. A failing account or project is logged and skipped rather than aborting the whole
+run, but any failure makes the process exit non-zero: a silent backup is worse than none.
 """
 
 import argparse
@@ -62,9 +61,13 @@ def backup_account(account: Account, out_root: str | Path) -> BackupReport:
 
     client = ClaudeClient(account.token)
     try:
-        results = client.export_all_projects_to_dir(out_dir)
+        results = client.projects.pull_all(out_dir)
     except AuthError as exc:
         logger.error("Account '%s': auth failed: %s", account.slug, exc)
+        report.failures.append(f"{account.slug}: {exc}")
+        return report
+    except Exception as exc:
+        logger.exception("Account '%s': backup failed: %s", account.slug, exc)
         report.failures.append(f"{account.slug}: {exc}")
         return report
 
