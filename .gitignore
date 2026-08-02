@@ -15,3 +15,4 @@ wheels/
 
 # Default local backup output
 /claude-backup/
+/backup/

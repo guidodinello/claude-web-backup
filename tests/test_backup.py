@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from claude_client.render import slugify
+from curl_cffi import requests as cffi_requests
 
 from claude_web_backup.backup import Account, backup_account, load_accounts
 
@@ -96,7 +97,7 @@ def test_load_accounts_ignores_unrelated_env_vars(monkeypatch):
 # maps that primitive's dict[str, bool] result into BackupReport correctly.
 
 
-@patch("claude_client.client.requests")
+@patch("claude_client._transport.requests")
 def test_backup_account_writes_expected_layout(mock_req, tmp_path):
     account = Account(slug="personal", token=TOKEN)
 
@@ -121,7 +122,7 @@ def test_backup_account_writes_expected_layout(mock_req, tmp_path):
     assert (out / "conversations").exists()
 
 
-@patch("claude_client.client.requests")
+@patch("claude_client._transport.requests")
 def test_backup_account_iterates_all_chat_capable_orgs(mock_req, tmp_path):
     account = Account(slug="personal", token=TOKEN)
     project_a = {"uuid": "proj-a", "name": "Project A", "description": "", "prompt_template": ""}
@@ -147,7 +148,7 @@ def test_backup_account_iterates_all_chat_capable_orgs(mock_req, tmp_path):
     assert sorted(report.backed_up) == ["personal/Project A", "personal/Project B"]
 
 
-@patch("claude_client.client.requests")
+@patch("claude_client._transport.requests")
 def test_backup_account_one_project_failure_does_not_abort_others(mock_req, tmp_path):
     account = Account(slug="personal", token=TOKEN)
     project_a = {"uuid": "proj-a", "name": "Project A", "description": "", "prompt_template": ""}
@@ -156,7 +157,7 @@ def test_backup_account_one_project_failure_does_not_abort_others(mock_req, tmp_
     mock_req.get.side_effect = [
         _mock_response(ORGS_RESPONSE),  # export_all_projects_to_dir -> list_organizations
         _mock_response([project_a, project_b]),  # -> projects in org
-        Exception("boom"),  # export proj-a: get_project raises
+        cffi_requests.exceptions.RequestException("boom"),  # pull proj-a: get_project raises
         _mock_response(project_b),  # export proj-b: get_project
         _mock_response(MEMORY_RESPONSE),
         _mock_response([]),
@@ -170,7 +171,7 @@ def test_backup_account_one_project_failure_does_not_abort_others(mock_req, tmp_
     assert report.backed_up == ["personal/Project B"]
 
 
-@patch("claude_client.client.requests")
+@patch("claude_client._transport.requests")
 def test_backup_account_auth_error_listing_projects_is_recorded(mock_req, tmp_path):
     account = Account(slug="personal", token=TOKEN)
     mock_req.get.return_value = _mock_response({}, status_code=401)
