@@ -16,9 +16,6 @@ logger = { path = "/home/guido/projects/logger" }
 [project.scripts]
 claude-backup = "claude_web_backup.backup:main"
 
-[project.optional-dependencies]
-dev = ["pytest>=8"]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -41,4 +38,5 @@ known-first-party = ["claude_web_backup"]
 dev = [
     "pytest>=9.0.3",
     "ruff>=0.15.12",
+    "pre-commit>=4.6.1",
 ]
