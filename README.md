@@ -88,16 +88,17 @@ Unit files live in `systemd/` in this repo:
 
 ## Git-versioned history
 
-The backup directory (`$CLAUDE_BACKUP_DIR`, default `./backup`) is its own git repository,
-nested inside this repo but ignored by it (`.gitignore` → `/backup/`). After every
-successful run, `scripts/commit-backup.sh` does `git add -A` and commits with
+The backup directory (`$CLAUDE_BACKUP_DIR`, default `./claude-backup`) is its own git
+repository, nested inside this repo but ignored by it (`.gitignore` → `/backup/`). After
+every successful run, `scripts/commit-backup.sh` does `git add -A` and commits with
 `--allow-empty`, so there is one commit per run even on nights nothing changed — the
-history doubles as a record that the backup actually ran that day.
+history doubles as a record that the backup actually ran that day. The script
+initializes the repository on first run if it doesn't exist yet.
 
 ```bash
-git -C backup log --oneline        # daily snapshots
-git -C backup diff <commit>~1 <commit>   # what changed that night
-git -C backup fsck                 # sanity-check the repository
+git -C "$CLAUDE_BACKUP_DIR" log --oneline        # daily snapshots
+git -C "$CLAUDE_BACKUP_DIR" diff <commit>~1 <commit>   # what changed that night
+git -C "$CLAUDE_BACKUP_DIR" fsck                 # sanity-check the repository
 ```
 
 Install:
