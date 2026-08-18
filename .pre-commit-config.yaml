@@ -1,12 +1,6 @@
-# Baseline pre-commit config for a Python repo. Scoped down from a larger
-# project's config (module-boundary checks, security scanners, framework-
-# specific hooks) to the hygiene + formatting layer every Python repo wants
-# regardless of size — see docs/github-standard.md § CI/pre-commit baseline
-# for what's deliberately left out and why.
-#
-# Adopt: cp this file to .pre-commit-config.yaml at the repo root, adjust
-# `language_version`/pyupgrade's `--pyXY-plus` to match your actual Python
-# version, then `pre-commit install`.
+# Baseline pre-commit config — from dev-standards templates/pre-commit/python.yaml,
+# with hook revs bumped to match the uv.lock pins so pre-commit and `uv run ruff`
+# never diverge.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -27,8 +21,8 @@ repos:
         args: [--py313-plus]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.12
+    rev: v0.15.22
     hooks:
-      - id: ruff-format
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format

@@ -16,9 +16,6 @@ logger = { path = "/home/guido/projects/logger" }
 [project.scripts]
 claude-backup = "claude_web_backup.backup:main"
 
-[project.optional-dependencies]
-dev = ["pytest>=8"]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

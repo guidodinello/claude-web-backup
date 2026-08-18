@@ -128,11 +128,6 @@ dependencies = [
     { name = "logger" },
 ]
 
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "pre-commit" },
@@ -144,9 +139,7 @@ dev = [
 requires-dist = [
     { name = "claude-client", directory = "/home/guido/projects/claude-client" },
     { name = "logger", directory = "/home/guido/projects/logger" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
 ]
-provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
