@@ -8,3 +8,4 @@ Type=oneshot
 WorkingDirectory=/home/guido/projects/claude-web-backup
 EnvironmentFile=/home/guido/projects/claude-web-backup/.env.backup
 ExecStart=/home/guido/.local/bin/uv run claude-backup
+ExecStartPost=/home/guido/projects/claude-web-backup/scripts/commit-backup.sh
