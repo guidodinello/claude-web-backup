@@ -82,8 +82,23 @@ machine was off, and `journalctl` gives you a searchable log for free.
 
 Unit files live in `systemd/` in this repo:
 
-- `claude-backup.service` — oneshot, loads `.env.backup`, runs `uv run claude-backup`.
+- `claude-backup.service` — oneshot, loads `.env.backup`, runs `uv run claude-backup`, then
+  `scripts/commit-backup.sh`.
 - `claude-backup.timer` — fires daily at 23:30, `Persistent=true`.
+
+## Git-versioned history
+
+The backup directory (`$CLAUDE_BACKUP_DIR`, default `./backup`) is its own git repository,
+nested inside this repo but ignored by it (`.gitignore` → `/backup/`). After every
+successful run, `scripts/commit-backup.sh` does `git add -A` and commits with
+`--allow-empty`, so there is one commit per run even on nights nothing changed — the
+history doubles as a record that the backup actually ran that day.
+
+```bash
+git -C backup log --oneline        # daily snapshots
+git -C backup diff <commit>~1 <commit>   # what changed that night
+git -C backup fsck                 # sanity-check the repository
+```
 
 Install:
 
