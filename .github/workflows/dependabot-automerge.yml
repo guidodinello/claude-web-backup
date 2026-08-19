@@ -1,13 +1,10 @@
 # Auto-merges Dependabot's own PRs — patch/minor only, major stays manual.
 #
-# Requires a GitHub App to mint the actual merge token — see below for why,
-# and docs/github-standard.md § Dependabot for the exact setup steps
+# Requires a GitHub App to mint the actual merge token — see below for why
 # (create the App, install it, add two Dependabot secrets). Without that
 # App configured, this workflow degrades gracefully: it reports "not
 # configured" and leaves the PR for a manual merge, rather than failing.
-#
-# Adopt: cp to .github/workflows/dependabot-automerge.yml. Fully generic,
-# no per-repo edits needed — the App ID/key come from secrets, not this file.
+# See the "not configured" step below for the exact setup steps.
 name: Dependabot auto-merge
 
 on: pull_request
@@ -48,8 +45,12 @@ jobs:
           app-id: ${{ env.APP_ID }}
           private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
 
-      # `--auto` queues the merge behind the required CI check rather than merging
-      # immediately, so the branch ruleset still decides whether it lands.
+      # `--auto` queues the merge to happen once the PR is mergeable, rather than
+      # merging immediately outright. NOTE: `main` currently has no required status
+      # checks (no branch protection, and the active ruleset has no
+      # required_status_checks), so this does not actually gate on CI passing —
+      # add "Lint Python" / "Tests (Python)" as required checks (branch protection
+      # or ruleset) before relying on this for a real CI gate.
       #
       # Gated on the mint step's outcome rather than on APP_ID. `outcome == 'success'`
       # subsumes the APP_ID check (an unset id leaves this 'skipped') and states the real

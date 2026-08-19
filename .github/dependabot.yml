@@ -1,13 +1,8 @@
 # Dependabot version-update baseline for a single-package Python repo.
-# Distinct from the vulnerability-alert/automated-security-fix settings
-# github-standard.py already turns on via the GitHub API — those are
-# security-only patches; this is routine "keep pinned deps current" PRs
-# on a schedule, for three ecosystems: your actual dependencies (pip),
-# your CI Actions pins, and your pre-commit hook revs.
-#
-# Adopt: cp to .github/dependabot.yml, adjust `directory` if the repo
-# isn't laid out with pyproject.toml at the root (see fitted's
-# .github/dependabot.yml for the monorepo/multi-directory shape).
+# Distinct from the vulnerability-alert/automated-security-fix settings,
+# which are security-only patches; this is routine "keep pinned deps
+# current" PRs on a schedule, for two ecosystems: your actual
+# dependencies (pip) and your CI Actions pins.
 #
 # Note: a floating range (e.g. `ruff>=0.8.0`) already permits any newer
 # version, so Dependabot has nothing to bump there and won't open a PR
@@ -20,15 +15,6 @@ updates:
       interval: weekly
     groups:
       dependencies:
-        patterns:
-          - "*"
-
-  - package-ecosystem: pre-commit
-    directory: /
-    schedule:
-      interval: weekly
-    groups:
-      pre-commit-hooks:
         patterns:
           - "*"
 
