@@ -10,8 +10,16 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-claude-client = { path = "/home/guido/projects/claude-client" }
-logger = { path = "/home/guido/projects/logger" }
+# Git sources, not local paths: uv sync needs to resolve these in CI (GitHub Actions
+# runners don't have sibling repos checked out), and uv.lock pins the exact resolved
+# commit regardless. Both track their main branch; bump with
+# `uv lock --upgrade-package <name>` when the sibling repo changes and you want the update.
+#
+# claude-client is pinned to its chore/git-source-deps branch (guidodinello/claude-client#7)
+# until that PR merges — claude-client's own main still has a local-path source for logger,
+# which breaks resolution here. Switch back to branch="main" once #7 lands, then re-lock.
+claude-client = { git = "https://github.com/guidodinello/claude-client", branch = "chore/git-source-deps" }
+logger = { git = "https://github.com/guidodinello/logger", branch = "main" }
 
 [project.scripts]
 claude-backup = "claude_web_backup.backup:main"
