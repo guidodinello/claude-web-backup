@@ -136,21 +136,25 @@ uv run pytest tests/ -v     # tests
 ```
 
 `claude-client` and `logger` are git dependencies (see `[tool.uv.sources]` in
-`pyproject.toml`), not local paths — `uv sync` needs to resolve them the same way in CI as
-on this machine, and GitHub Actions runners don't have the sibling repos checked out.
-`uv.lock` pins the exact commit of each; `uv sync` alone won't pick up a new commit on the
-sibling repo's tracked branch. Run `uv lock --upgrade-package claude-client
+`pyproject.toml`), not local paths — a future CI workflow will need to resolve them the
+same way it does on this machine, and GitHub Actions runners don't have the sibling repos
+checked out. `uv.lock` pins the exact commit of each; `uv sync` alone won't pick up a new
+commit on the sibling repo's tracked branch. Run `uv lock --upgrade-package claude-client
 --upgrade-package logger` to re-resolve against their latest commits, then `uv sync`.
 
 **Testing an unpushed change to a sibling repo.** There's no persistent local override —
 `uv` only reads `[tool.uv.sources]` from `pyproject.toml`, and `sources` isn't a valid key
 in `uv.toml` (verified: uv rejects it there as "only applicable in the context of a
-project"). To test against code that isn't pushed yet, temporarily edit the source back to
-a local path (`{ path = "/home/guido/projects/claude-client" }`), `uv sync`, test — then
-revert to the git source before committing. For anything more than a quick check, push the
-sibling repo's change to a branch and point the source at that branch instead
-(`{ git = "...", branch = "your-branch" }`); switch back to `branch = "main"` once it
-merges.
+project"). Push the sibling repo's change to a branch and point the source at that branch
+instead (`{ git = "...", branch = "your-branch" }`), `uv sync`, test — then switch back to
+`branch = "main"` once it merges. This is the safer default: it can be committed and shared
+without breaking anyone else's `uv sync`.
+
+For a quick local-only check, you can instead temporarily edit the source to a local path
+(`{ path = "/home/guido/projects/claude-client" }`), `uv sync`, test — then revert to the
+git source before committing. This re-introduces the machine-specific absolute path the
+git-source migration removed, and nothing stops it from being committed by accident, so
+prefer the branch-pin approach above unless you need a fast local iteration loop.
 
 **Careful with `--upgrade-package`.** It pulls in whatever the sibling repo's tracked
 branch currently has, which may be newer (or broken) relative to what this backup was
