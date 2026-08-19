@@ -1,0 +1,28 @@
+# Dependabot version-update baseline for a single-package Python repo.
+# Distinct from the vulnerability-alert/automated-security-fix settings,
+# which are security-only patches; this is routine "keep pinned deps
+# current" PRs on a schedule, for two ecosystems: your actual
+# dependencies (pip) and your CI Actions pins.
+#
+# Note: a floating range (e.g. `ruff>=0.8.0`) already permits any newer
+# version, so Dependabot has nothing to bump there and won't open a PR
+# — this only helps once a dependency is actually pinned/bounded.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

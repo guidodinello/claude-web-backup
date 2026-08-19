@@ -1,0 +1,55 @@
+# Baseline CI for a small/single-package Python repo — enforces the ruff
+# format/lint and pytest hooks from the pre-commit baseline
+# (.pre-commit-config.yaml) in CI, since pre-commit itself only runs locally.
+# The other pre-commit hooks (trailing-whitespace, end-of-file-fixer,
+# check-yaml/toml/json, check-added-large-files, debug-statements, pyupgrade)
+# are not enforced here and run nowhere else either.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-python:
+    name: Lint Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --dev --locked
+
+      - name: ruff format check
+        run: uv run ruff format --check .
+
+      - name: ruff lint
+        run: uv run ruff check .
+
+  test-python:
+    name: Tests (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --dev --locked
+
+      - name: Run tests
+        run: uv run pytest

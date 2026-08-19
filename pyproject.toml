@@ -10,12 +10,12 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-# Git sources, not local paths: the old absolute paths only resolved on this machine.
-# A CI workflow that depends on this is a separate, upcoming effort. uv.lock pins the
-# exact resolved commit; a plain `uv sync` prefers that locked commit over the branch's
-# latest, so it won't silently pick up new commits. Both track main; bump with
-# `uv lock --upgrade-package <name>` when the sibling repo changes and you want the
-# update here.
+# Git sources, not local paths: the old absolute paths only resolved on this machine,
+# which is exactly what .github/workflows/ci.yml needs to resolve too. uv.lock pins
+# the exact resolved commit; a plain `uv sync` prefers that locked commit over the
+# branch's latest, so it won't silently pick up new commits. Both track main; bump
+# with `uv lock --upgrade-package <name>` when the sibling repo changes and you want
+# the update here.
 claude-client = { git = "https://github.com/guidodinello/claude-client", branch = "main" }
 logger = { git = "https://github.com/guidodinello/logger", branch = "main" }
 
