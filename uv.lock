@@ -96,27 +96,11 @@ wheels = [
 [[package]]
 name = "claude-client"
 version = "0.1.0"
-source = { directory = "/home/guido/projects/claude-client" }
+source = { git = "https://github.com/guidodinello/claude-client?branch=main#f85903b8d0a1103165875a1dbf6380143b6db695" }
 dependencies = [
     { name = "curl-cffi" },
     { name = "logger" },
     { name = "rich" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "curl-cffi", specifier = ">=0.7" },
-    { name = "logger", directory = "/home/guido/projects/logger" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "rich", specifier = ">=15.0.0" },
-]
-provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pre-commit", specifier = ">=4.6.0" },
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "ruff", specifier = ">=0.15.12" },
 ]
 
 [[package]]
@@ -137,8 +121,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "claude-client", directory = "/home/guido/projects/claude-client" },
-    { name = "logger", directory = "/home/guido/projects/logger" },
+    { name = "claude-client", git = "https://github.com/guidodinello/claude-client?branch=main" },
+    { name = "logger", git = "https://github.com/guidodinello/logger?branch=main" },
 ]
 
 [package.metadata.requires-dev]
@@ -229,12 +213,7 @@ wheels = [
 [[package]]
 name = "logger"
 version = "0.1.0"
-source = { directory = "/home/guido/projects/logger" }
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.15.12" }]
+source = { git = "https://github.com/guidodinello/logger?branch=main#54b5902d8d4ae639a9ada9ca1100dcc6a837f84a" }
 
 [[package]]
 name = "markdown-it-py"

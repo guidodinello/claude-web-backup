@@ -4,7 +4,7 @@ A local, automatic nightly backup of Claude.ai projects and their conversations,
 web-side data is never the single point of failure.
 
 Depends on [`claude-client`](https://github.com/guidodinello/claude-client) (a sibling
-project, local path dependency) for all Claude.ai API access — this project is just the
+project, git dependency) for all Claude.ai API access — this project is just the
 orchestration, config, and scheduling on top of it.
 
 ## What it reuses from claude-client
@@ -135,14 +135,30 @@ uv run ruff check --fix .   # lint
 uv run pytest tests/ -v     # tests
 ```
 
-`claude-client` and `logger` are path dependencies (see `[tool.uv.sources]` in
-`pyproject.toml`). After changing their source, `uv sync` alone won't always pick up the
-new code in this project's venv — run
-`uv sync --reinstall-package claude-client --reinstall-package logger` to force it.
+`claude-client` and `logger` are git dependencies (see `[tool.uv.sources]` in
+`pyproject.toml`), not local paths — a future CI workflow will need to resolve them the
+same way it does on this machine, and GitHub Actions runners don't have the sibling repos
+checked out. `uv.lock` pins the exact commit of each; `uv sync` alone won't pick up a new
+commit on the sibling repo's tracked branch. Run `uv lock --upgrade-package claude-client
+--upgrade-package logger` to re-resolve against their latest commits, then `uv sync`.
 
-**Careful with reinstalls of internal deps.** A reinstall pulls in whatever the sibling
-repos currently have on disk, which may be newer (or broken) relative to what this backup
-was written against. `uv run` and the systemd service only pick up reinstalled code after
-a sync, so a stale venv is the *safe* failure mode. If you reinstall, verify a manual
-`uv run claude-backup` afterwards — don't let a fresh reinstall run silently into the
+**Testing an unpushed change to a sibling repo.** There's no persistent local override —
+`uv` only reads `[tool.uv.sources]` from `pyproject.toml`, and `sources` isn't a valid key
+in `uv.toml` (verified: uv rejects it there as "only applicable in the context of a
+project"). Push the sibling repo's change to a branch and point the source at that branch
+instead (`{ git = "...", branch = "your-branch" }`), `uv sync`, test — then switch back to
+`branch = "main"` once it merges. This is the safer default: it can be committed and shared
+without breaking anyone else's `uv sync`.
+
+For a quick local-only check, you can instead temporarily edit the source to a local path
+(`{ path = "/home/guido/projects/claude-client" }`), `uv sync`, test — then revert to the
+git source before committing. This re-introduces the machine-specific absolute path the
+git-source migration removed, and nothing stops it from being committed by accident, so
+prefer the branch-pin approach above unless you need a fast local iteration loop.
+
+**Careful with `--upgrade-package`.** It pulls in whatever the sibling repo's tracked
+branch currently has, which may be newer (or broken) relative to what this backup was
+written against. `uv run` and the systemd service only pick up the new commit after a
+sync, so a stale lockfile is the *safe* failure mode. If you upgrade, verify a manual
+`uv run claude-backup` afterwards — don't let a fresh upgrade run silently into the
 nightly timer without checking the logs.
