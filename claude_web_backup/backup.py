@@ -16,16 +16,22 @@ import argparse
 import contextlib
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from claude_client import AuthError, ClaudeClient
+from curl_cffi.requests.exceptions import RequestException
 from logger import get_logger, init_logging
 
 logger = get_logger(__name__)
 
 _TOKEN_PREFIX = "CLAUDE_BACKUP_TOKEN_"
 _DEFAULT_OUT_DIR = "./claude-backup"
+# Covers transient network conditions (DNS not up yet, connection refused, timeouts) —
+# e.g. the systemd timer firing at boot before the network is actually online.
+_MAX_ATTEMPTS = 4
+_INITIAL_BACKOFF_SECONDS = 5.0
 
 
 @dataclass
@@ -54,6 +60,31 @@ def load_accounts() -> list[Account]:
     return sorted(accounts, key=lambda a: a.slug)
 
 
+def _pull_all_with_retry(client: ClaudeClient, out_dir: Path) -> dict[str, bool]:
+    """Retry `pull_all` with exponential backoff on transient network errors.
+
+    AuthError isn't a RequestException, so it isn't retried — an expired token
+    won't magically become valid on the next attempt.
+    """
+    delay = _INITIAL_BACKOFF_SECONDS
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            return client.projects.pull_all(out_dir)
+        except RequestException as exc:
+            if attempt == _MAX_ATTEMPTS:
+                raise
+            logger.warning(
+                "Network error on attempt %d/%d (retrying in %.0fs): %s",
+                attempt,
+                _MAX_ATTEMPTS,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+            delay *= 2
+    raise AssertionError("unreachable")
+
+
 def backup_account(account: Account, out_root: str | Path) -> BackupReport:
     """Back up every project in every chat-capable org of this account."""
     report = BackupReport()
@@ -61,7 +92,7 @@ def backup_account(account: Account, out_root: str | Path) -> BackupReport:
 
     client = ClaudeClient(account.token)
     try:
-        results = client.projects.pull_all(out_dir)
+        results = _pull_all_with_retry(client, out_dir)
     except AuthError as exc:
         logger.error("Account '%s': auth failed: %s", account.slug, exc)
         report.failures.append(f"{account.slug}: {exc}")

@@ -75,6 +75,12 @@ is worse than none. Failures are logged and (best-effort, if `notify-send` is av
 surfaced as a desktop notification. One failing project never aborts the rest of the run;
 failures are collected and reported at the end.
 
+A transient network error (DNS not resolving, connection refused, timeout — e.g. the
+nightly timer firing right as the machine wakes up, before Wi-Fi has actually come up) is
+retried with exponential backoff (4 attempts, starting at 5s) before being counted as a
+failure. An expired/invalid session token is not retried — no amount of waiting fixes
+that.
+
 ## Scheduling — systemd user timer
 
 Chosen over cron because `Persistent=true` reruns a backup that was missed while the
