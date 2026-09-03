@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 from claude_client import AuthError
 from claude_client.render import slugify
+from curl_cffi.requests.exceptions import DNSError
 
 from claude_web_backup.backup import Account, backup_account, load_accounts, run_backup
 
@@ -120,6 +121,41 @@ def test_backup_account_records_unexpected_error_as_account_failure(mock_client_
     assert not report.ok
     assert report.backed_up == []
     assert report.failures == ["personal: disk full"]
+
+
+@patch("claude_web_backup.backup.time.sleep")
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_retries_transient_network_error_then_succeeds(
+    mock_client_cls, mock_sleep, tmp_path
+):
+    client = _mock_client()
+    client.projects.pull_all.side_effect = [
+        DNSError("Could not resolve host: claude.ai"),
+        DNSError("Could not resolve host: claude.ai"),
+        {"Project A": True},
+    ]
+    mock_client_cls.return_value = client
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert report.ok
+    assert report.backed_up == ["personal/Project A"]
+    assert client.projects.pull_all.call_count == 3
+    assert mock_sleep.call_count == 2
+
+
+@patch("claude_web_backup.backup.time.sleep")
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_gives_up_after_max_retries(mock_client_cls, mock_sleep, tmp_path):
+    client = _mock_client()
+    client.projects.pull_all.side_effect = DNSError("Could not resolve host: claude.ai")
+    mock_client_cls.return_value = client
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert not report.ok
+    assert client.projects.pull_all.call_count == 4
+    assert mock_sleep.call_count == 3
 
 
 @patch("claude_web_backup.backup.ClaudeClient")

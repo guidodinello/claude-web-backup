@@ -109,6 +109,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "claude-client" },
+    { name = "curl-cffi" },
     { name = "logger" },
 ]
 
@@ -122,6 +123,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "claude-client", git = "https://github.com/guidodinello/claude-client?branch=main" },
+    { name = "curl-cffi" },
     { name = "logger", git = "https://github.com/guidodinello/logger?branch=main" },
 ]
 
