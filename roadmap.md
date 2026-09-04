@@ -1,10 +1,18 @@
 # Roadmap
 
-- [ ] **Standalone (non-project) chats.** The backup is currently project-scoped only —
-  conversations that don't belong to any project aren't captured. Needs a new
-  "list all chat_conversations for an account" method in `claude-client` (the API only
-  exposes conversations scoped to a project today, via `conversations_v2`) plus a
-  top-level `conversations/` folder per account in the backup layout.
+- [x] **Standalone (non-project) chats** — done 2026-09-04, via two sequential PRs.
+  `claude-client` #17 added `ConversationsResource.list_standalone()`/`pull_standalone()`,
+  verified live against a previously-unwrapped endpoint
+  (`GET /organizations/{org}/chat_conversations`) that lists every conversation in an org —
+  project-scoped and standalone alike, distinguished by `project_uuid` — and fans out over
+  every chat-capable org the same way `pull_all` does. This repo's PR then threaded it
+  through `backup_account` into a new `{account}/conversations/` directory, reusing the
+  existing `--prune`/`CLAUDE_BACKUP_PRUNE` opt-in. Also fixed a `--reconcile` landmine
+  found before it shipped: the account-level sweep would have `rmtree`'d the new directory
+  wholesale on its first run (absent from the project manifest, not in any keep-list) — now
+  reserved from wholesale removal while still swept internally against its own manifest.
+  First real run pulled all 403 standalone conversations on this account; a second run
+  correctly reported them all "unchanged" via the incremental-pull manifest.
 - [x] **Version history** — done 2026-08-17: `backup/` is its own git repo, committed nightly
   via `scripts/commit-backup.sh` (`ExecStartPost` in the systemd service) — one
   `--allow-empty` commit per run even when nothing changed, so history doubles as proof

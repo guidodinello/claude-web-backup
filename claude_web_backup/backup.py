@@ -8,7 +8,9 @@ Env-driven so it runs unattended (systemd timer, cron, etc.):
 - ``CLAUDE_BACKUP_PRUNE`` — set to a truthy value (``1``/``true``/``yes``/``on``) to enable
   pruning on every run, same effect as ``--prune``.
 
-Layout written: ``{out}/{account_slug}/{project_slug}/{project.md,docs/,conversations/}``.
+Layout written: ``{out}/{account_slug}/{project_slug}/{project.md,docs/,conversations/}``,
+plus ``{out}/{account_slug}/conversations/`` for standalone (non-project) chats, pulled
+account-wide across every chat-capable org via ``client.conversations.pull_standalone``.
 By default this mirrors ``pull_all``'s accumulate-only semantics — it overwrites but never
 deletes, so the backup only ever grows. Pass ``--prune``/``CLAUDE_BACKUP_PRUNE=1`` to also
 delete local files/directories removed on the web (claude-client does the deleting; see its
@@ -25,6 +27,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,6 +56,14 @@ _ALWAYS_KEEP = frozenset(
 # a partial/incorrect manifest rather than genuine web-side deletions.
 _MAX_PRUNE_FRACTION = 0.2
 
+# The standalone-conversations directory lives alongside project dirs at the account level
+# but isn't itself a project, so it never appears in the account's project-slug manifest.
+# Reserved so the sweep never rmtree's it wholesale — it's still swept internally against
+# its own manifest, just like any project's docs/conversations subdir. A project literally
+# named "Conversations" would collide with this reserved name (claude-client's slug
+# resolver has no reserved-name list) — a known, accepted edge case, not engineered around.
+_RESERVED_ACCOUNT_DIRS = frozenset({"conversations"})
+
 
 @dataclass
 class Account:
@@ -69,6 +80,10 @@ class BackupReport:
     # (--prune without --reconcile) is not observable here — see the module docstring
     # and README for why we don't fabricate a count. The real record is the git commit.
     pruned: list[str] = field(default_factory=list)
+    # Filled directly from pull_standalone()'s own return value — a real, complete
+    # per-conversation record (unlike pull_all's discarded per-project detail), since
+    # pull_standalone actually returns one: filename -> created/updated/unchanged/deleted.
+    standalone: dict[str, str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -85,10 +100,8 @@ def load_accounts() -> list[Account]:
     return sorted(accounts, key=lambda a: a.slug)
 
 
-def _pull_all_with_retry(
-    client: ClaudeClient, out_dir: Path, *, prune: bool = False
-) -> dict[str, bool]:
-    """Retry `pull_all` with exponential backoff on transient network errors.
+def _retry_with_backoff[T](fn: Callable[[], T]) -> T:
+    """Retry `fn` with exponential backoff on transient network errors.
 
     AuthError isn't a RequestException, so it isn't retried — an expired token
     won't magically become valid on the next attempt.
@@ -96,7 +109,7 @@ def _pull_all_with_retry(
     delay = _INITIAL_BACKOFF_SECONDS
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
-            return client.projects.pull_all(out_dir, prune=prune)
+            return fn()
         except RequestException as exc:
             if attempt == _MAX_ATTEMPTS:
                 raise
@@ -113,13 +126,22 @@ def _pull_all_with_retry(
 
 
 def backup_account(account: Account, out_root: str | Path, *, prune: bool = False) -> BackupReport:
-    """Back up every project in every chat-capable org of this account."""
+    """Back up every project, plus every standalone conversation, in this account.
+
+    Both calls share one try/except deliberately: a total failure in either (not a
+    per-project/per-conversation failure — those are already isolated inside the SDK —
+    but e.g. disk full) fails the whole account for this run rather than half-completing
+    it, matching the existing all-or-nothing granularity for a single account.
+    """
     report = BackupReport()
     out_dir = Path(out_root) / account.slug
 
     client = ClaudeClient(account.token)
     try:
-        results = _pull_all_with_retry(client, out_dir, prune=prune)
+        results = _retry_with_backoff(lambda: client.projects.pull_all(out_dir, prune=prune))
+        report.standalone = _retry_with_backoff(
+            lambda: client.conversations.pull_standalone(out_dir / "conversations", prune=prune)
+        )
     except AuthError as exc:
         logger.error("Account '%s': auth failed: %s", account.slug, exc)
         report.failures.append(f"{account.slug}: {exc}")
@@ -204,7 +226,11 @@ def _reconcile_account(account_dir: Path, backup_root: Path) -> list[str]:
         )
         return []
 
-    existing_project_dirs = [p for p in account_dir.iterdir() if p.is_dir() and p.name != ".git"]
+    existing_project_dirs = [
+        p
+        for p in account_dir.iterdir()
+        if p.is_dir() and p.name != ".git" and p.name not in _RESERVED_ACCOUNT_DIRS
+    ]
     if len(project_slugs) < len(existing_project_dirs) * (1 - _MAX_PRUNE_FRACTION):
         logger.error(
             "Reconcile: refusing to sweep %s — manifest names only %d of %d project dirs "
@@ -217,7 +243,7 @@ def _reconcile_account(account_dir: Path, backup_root: Path) -> list[str]:
         )
         return []
 
-    removed = _sweep(account_dir, project_slugs)
+    removed = _sweep(account_dir, project_slugs | _RESERVED_ACCOUNT_DIRS)
     for slug in sorted(project_slugs):
         project_dir = account_dir / slug
         if not project_dir.is_dir():
@@ -231,6 +257,17 @@ def _reconcile_account(account_dir: Path, backup_root: Path) -> list[str]:
                 logger.warning("Reconcile: no manifest in %s — skipping", sub_dir)
                 continue
             removed += _sweep(sub_dir, names)
+
+    # Account-level standalone conversations: reserved from wholesale removal above, but
+    # still swept internally against its own manifest — same treatment as a project's
+    # docs/conversations subdir, just one level up.
+    standalone_dir = account_dir / "conversations"
+    if standalone_dir.is_dir():
+        names = _manifest_filenames(standalone_dir)
+        if names is None:
+            logger.warning("Reconcile: no manifest in %s — skipping", standalone_dir)
+        else:
+            removed += _sweep(standalone_dir, names)
 
     logger.info("Reconcile: %d orphan(s) removed under %s", len(removed), account_dir)
     return removed
@@ -260,10 +297,12 @@ def run_backup(
 
     all_failures: list[str] = []
     total_backed_up = 0
+    total_standalone = 0
     total_pruned = 0
     for account in accounts:
         report = backup_account(account, out_dir, prune=prune)
         total_backed_up += len(report.backed_up)
+        total_standalone += len(report.standalone)
         all_failures.extend(report.failures)
 
         if reconcile:
@@ -284,8 +323,9 @@ def run_backup(
         return 1
 
     logger.info(
-        "Backup complete: %d project(s) across %d account(s)%s.",
+        "Backup complete: %d project(s), %d standalone conversation(s) across %d account(s)%s.",
         total_backed_up,
+        total_standalone,
         len(accounts),
         f", {total_pruned} orphan(s) reconciled" if reconcile else "",
     )
