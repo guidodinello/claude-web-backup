@@ -9,13 +9,15 @@ orchestration, config, and scheduling on top of it.
 
 ## What it reuses from claude-client
 
-- `ClaudeClient.projects.pull_all(out_dir)` — pulls every project across every
+- `ClaudeClient.projects.pull_all(out_dir, prune=...)` — pulls every project across every
   chat-capable org on an account in one call. Per project it writes:
   `project.md` (name, description, instructions, memory, controls), `docs/` (one file per
-  knowledge doc), `conversations/` (one file per conversation). It **overwrites but never
-  deletes** — accumulate-only, which is what you want from a backup. All the multi-org
-  scoping is handled inside the SDK; this project just calls it once per account and maps
-  the result into a report.
+  knowledge doc), `conversations/` (one file per conversation). By default it
+  **overwrites but never deletes** — accumulate-only. Pass `--prune` (see below) to also
+  delete local files/directories removed on the web; the SDK does the deleting, tracked via
+  a `.claude-pull-manifest.json` sidecar it writes alongside each pulled directory. All the
+  multi-org scoping is handled inside the SDK; this project just calls it once per account
+  and maps the result into a report.
 
 Scope: project-scoped conversations only. Standalone (non-project) chats aren't backed up
 yet — see [`roadmap.md`](roadmap.md).
@@ -34,13 +36,16 @@ $CLAUDE_BACKUP_DIR/
 ```
 
 `{account_slug}` comes from the `CLAUDE_BACKUP_TOKEN_<SLUG>` env var name (lowercased).
-`{project-slug}` is the sanitized project name (`claude_client.render.slugify`). A web-side
-project rename orphans the old local dir — harmless for a plain mirror; the old copy is
-just stale, not lost.
+`{project-slug}` is the sanitized project name (`claude_client.render.slugify`), kept stable
+across runs by uuid once a project has a manifest entry. A web-side project rename is
+tracked correctly once pruning is enabled (see below); without `--prune` it orphans the old
+local dir — harmless for a plain mirror, since the old copy is just stale, not lost.
 
-History model: **plain mirror**. Each run overwrites in place; there's no git commit and no
-dated snapshots. Nothing removed on the web is ever deleted locally, so it still behaves as
-an accumulate-only backup — it just has no diff history between runs.
+History model: default is **accumulate-only** — nothing removed on the web is deleted
+locally, so a plain run only ever grows the mirror. Pass `--prune`/`CLAUDE_BACKUP_PRUNE=1`
+to make it a true mirror instead (see "Pruning" below). Every run is also committed to the
+backup's own git history (see "Git-versioned history"), so even pruned files stay
+recoverable.
 
 ## Installation
 
@@ -63,6 +68,10 @@ One `CLAUDE_BACKUP_TOKEN_<SLUG>` per account to back up — add or remove accoun
 adding/removing env vars, no code changes needed. Tokens expire after some weeks; when
 they do, the backup run fails loudly (see below) and you re-paste fresh tokens here.
 
+Currently only the personal account is backed up — the work token is deliberately left
+unset in `.env.backup`. Set it (and re-add the corresponding `<SLUG>` var) whenever work
+backups are wanted; no code changes needed.
+
 ## Running manually
 
 ```bash
@@ -80,6 +89,51 @@ nightly timer firing right as the machine wakes up, before Wi-Fi has actually co
 retried with exponential backoff (4 attempts, starting at 5s) before being counted as a
 failure. An expired/invalid session token is not retried — no amount of waiting fixes
 that.
+
+## Pruning
+
+Off by default. Two ways to enable it:
+
+- `--prune` (or set `CLAUDE_BACKUP_PRUNE=1` in `.env.backup`, which the nightly systemd run
+  reads via `EnvironmentFile`) — threads `prune=True` into `pull_all`. claude-client deletes
+  local docs/conversations/project-dirs removed on the web, tracked via its own
+  `.claude-pull-manifest.json` manifests. A project whose own pull fails that run is never
+  pruned, even with this on — its manifest entry is carried forward unchanged.
+- `--reconcile` — this repo's own one-time sweep, for cleaning up orphans that accumulated
+  *before* manifests existed (see the gotcha below). Deletes anything on disk that no
+  manifest claims. Skipped entirely (with an error, exit code 1) if the run had any
+  failures, since a failed pull means the manifest it just wrote may not reflect the web.
+  It also refuses to run if the manifest looks implausibly short (a sanity tripwire against
+  sweeping on a partial/broken pull) — see `_reconcile_account` in `backup.py`.
+
+**Gotcha: the first `--prune` run only seeds manifests, it doesn't delete anything.**
+claude-client's prune only removes entries that were in a *previous* manifest; a mirror with
+no manifests yet (e.g. this repo's history before this feature) has nothing to diff against.
+That first run is harmless and necessary — after it, `--prune` prunes going forward. Any
+orphans that predate the first manifest are cleaned up once via `--reconcile`, not by
+`--prune`.
+
+**There's no dry-run for `--prune`** — claude-client deletes internally and offers no
+preview hook. Lean on git instead: run manually, inspect before the nightly
+`scripts/commit-backup.sh` would commit it:
+
+```bash
+uv run claude-backup --prune
+git -C "$CLAUDE_BACKUP_DIR" status --short
+git -C "$CLAUDE_BACKUP_DIR" diff --stat
+# looks wrong? undo before anything commits it:
+git -C "$CLAUDE_BACKUP_DIR" checkout -- . && git -C "$CLAUDE_BACKUP_DIR" clean -fd
+```
+
+`--reconcile` logs every path it removes at INFO before deleting it, so the journal is a
+readable record even after it's committed. Recovering something pruned in error, any time
+after it's committed:
+
+```bash
+git -C "$CLAUDE_BACKUP_DIR" log --diff-filter=D --name-only   # find which commit deleted it
+git -C "$CLAUDE_BACKUP_DIR" show <commit>~1:<path>             # view its last content
+git -C "$CLAUDE_BACKUP_DIR" checkout <commit>~1 -- <path>      # restore it
+```
 
 ## Scheduling — systemd user timer
 

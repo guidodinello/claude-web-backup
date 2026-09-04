@@ -10,19 +10,25 @@
   `--allow-empty` commit per run even when nothing changed, so history doubles as proof
   the backup ran. (Originally: plain mirror with no history; options were a git-committed
   mirror or dated snapshots.)
-- [ ] **Pruning.** `export_project_to_dir` never deletes, so projects/docs/conversations
-  removed on the web stay in the local backup forever (arguably correct for a backup, but
-  worth an explicit opt-in prune mode for people who want a true mirror). Now that the
-  mirror is git-versioned, pruning is recoverable and safe; tracked in
-  `claude-client/docs/bugs/pull-never-prunes-deleted-items.md`.
+- [x] **Pruning** — done 2026-09-03: opt-in via `--prune`/`CLAUDE_BACKUP_PRUNE=1`, which
+  threads `prune=True` into `claude-client`'s `pull_all` (manifest-based, fixed upstream in
+  `edf0550`; tracked in `claude-client/docs/bugs/pull-never-prunes-deleted-items.md`). Since
+  that mechanism only prunes entries recorded in a *previous* manifest — and the existing
+  mirror had none — added a one-time `--reconcile` sweep (new code, this repo) to clean up
+  pre-existing orphans by diffing disk against the manifests claude-client now writes. First
+  real run found and removed 88 stale docs accumulated before manifests existed; 0 project
+  dirs were orphaned. Off by default, gated on a fully successful pull, and recoverable via
+  the mirror's git history (deletions land in that night's commit).
 - [ ] **Token auto-refresh.** Session tokens expire after some weeks; today that's handled by
   failing loudly (non-zero exit + notify-send) and requiring a manual token re-paste into
   `.env.backup`. Could investigate refresh-token flows if the unofficial API exposes one.
-- [ ] **Revisit coupling when `claude-client` lands its tracked pull improvements.** When
-  `claude-client` ships the manifest-based network-incremental pull (tracked in
-  `claude-client/docs/bugs/pull-re-fetches-unchanged-content.md`), re-verify the backup
-  behavior documented here: the manifest skip changes "web is source of truth" semantics
-  (a local edit won't be overwritten when the web hasn't changed), and `pull_all` may
-  gain statuses worth surfacing in the per-account report. The progress-bar consolidation
-  (`docs/bugs/pull-progress-bars-accumulate.md`) is cosmetic — a sanity check under
-  systemd is all that's needed.
+- [x] **Revisit coupling with `claude-client`'s pull improvements** — done 2026-09-03,
+  alongside the pruning upgrade (same `uv lock --upgrade-package claude-client` to `edf0550`).
+  Confirmed via a manual run: the manifest-based incremental pull works as documented, and
+  the semantic change is real — "web is source of truth" becomes "web is source of truth
+  *when it changed*" (a local edit now survives unless `force=True`; `--force` isn't wired
+  up in this repo yet, since nothing here needed it). `pull_all` still only returns
+  `dict[str, bool]`, so a richer per-account report (e.g. what was pruned) remains an
+  upstream ask, not something worth hacking around downstream — see `BackupReport.pruned`'s
+  docstring in `backup.py` for why. The progress-bar consolidation
+  (`docs/bugs/pull-progress-bars-accumulate.md`) is still open but cosmetic.
