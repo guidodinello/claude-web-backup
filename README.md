@@ -18,22 +18,31 @@ orchestration, config, and scheduling on top of it.
   a `.claude-pull-manifest.json` sidecar it writes alongside each pulled directory. All the
   multi-org scoping is handled inside the SDK; this project just calls it once per account
   and maps the result into a report.
-
-Scope: project-scoped conversations only. Standalone (non-project) chats aren't backed up
-yet — see [`roadmap.md`](roadmap.md).
+- `ClaudeClient.conversations.pull_standalone(out_dir, prune=...)` — pulls every
+  conversation that doesn't belong to any project, account-wide across every chat-capable
+  org, into one flat `conversations/` directory per account. Same incremental/prune
+  semantics as project conversations, sharing one manifest across orgs (conversation uuids
+  are unique account-wide).
 
 ## Target layout
 
 ```
 $CLAUDE_BACKUP_DIR/
   personal/
+    conversations/         # standalone (non-project) chats, one .md per conversation
     {project-slug}/
       project.md          # title, description, instructions, memory, controls
       docs/                # knowledge files
-      conversations/        # one .md per conversation
+      conversations/        # one .md per conversation in this project
   work/
     {project-slug}/ ...
 ```
+
+Note: a project literally named "Conversations" would slugify to `{project-slug}` =
+`conversations`, colliding with the reserved account-level directory above (claude-client's
+slug resolver has no reserved-name list). A known, accepted edge case — none of this
+account's projects hit it — rather than something engineered around. `--reconcile` is
+hardened so it can never delete the `conversations/` directory outright either way.
 
 `{account_slug}` comes from the `CLAUDE_BACKUP_TOKEN_<SLUG>` env var name (lowercased).
 `{project-slug}` is the sanitized project name (`claude_client.render.slugify`), kept stable
@@ -95,16 +104,20 @@ that.
 Off by default. Two ways to enable it:
 
 - `--prune` (or set `CLAUDE_BACKUP_PRUNE=1` in `.env.backup`, which the nightly systemd run
-  reads via `EnvironmentFile`) — threads `prune=True` into `pull_all`. claude-client deletes
-  local docs/conversations/project-dirs removed on the web, tracked via its own
+  reads via `EnvironmentFile`) — threads `prune=True` into both `pull_all` and
+  `pull_standalone`. claude-client deletes local docs/conversations/project-dirs (and
+  standalone conversations) removed on the web, tracked via its own
   `.claude-pull-manifest.json` manifests. A project whose own pull fails that run is never
   pruned, even with this on — its manifest entry is carried forward unchanged.
 - `--reconcile` — this repo's own one-time sweep, for cleaning up orphans that accumulated
   *before* manifests existed (see the gotcha below). Deletes anything on disk that no
-  manifest claims. Skipped entirely (with an error, exit code 1) if the run had any
-  failures, since a failed pull means the manifest it just wrote may not reflect the web.
-  It also refuses to run if the manifest looks implausibly short (a sanity tripwire against
-  sweeping on a partial/broken pull) — see `_reconcile_account` in `backup.py`.
+  manifest claims, including stale standalone conversations — but the account-level
+  `conversations/` directory itself is reserved and never removed wholesale, even though
+  it never appears in the project manifest. Skipped entirely (with an error, exit code 1)
+  if the run had any failures, since a failed pull means the manifest it just wrote may not
+  reflect the web. It also refuses to run if the manifest looks implausibly short (a sanity
+  tripwire against sweeping on a partial/broken pull) — see `_reconcile_account` in
+  `backup.py`.
 
 **Gotcha: the first `--prune` run only seeds manifests, it doesn't delete anything.**
 claude-client's prune only removes entries that were in a *previous* manifest; a mirror with

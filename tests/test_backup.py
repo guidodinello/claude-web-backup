@@ -84,12 +84,18 @@ def test_load_accounts_ignores_unrelated_env_vars(monkeypatch):
 # dict into BackupReport correctly; the pull itself is claude-client's job.
 
 
-def _mock_client(results: dict[str, bool] | None = None, *, auth_error: bool = False) -> MagicMock:
+def _mock_client(
+    results: dict[str, bool] | None = None,
+    *,
+    auth_error: bool = False,
+    standalone: dict[str, str] | None = None,
+) -> MagicMock:
     client = MagicMock()
     if auth_error:
         client.projects.pull_all.side_effect = AuthError("Session token is invalid or expired.")
     else:
         client.projects.pull_all.return_value = results or {}
+    client.conversations.pull_standalone.return_value = standalone or {}
     return client
 
 
@@ -187,6 +193,43 @@ def test_backup_account_empty_results_is_ok(mock_client_cls, tmp_path):
     assert report.ok
     assert report.backed_up == []
     assert report.failures == []
+
+
+# ---------------------------------------------------- backup_account: standalone conversations
+#
+# client.conversations.pull_standalone returns dict[filename, status] — a real, complete
+# record (unlike pull_all's discarded per-project detail) — so backup_account stores it
+# verbatim on the report rather than reducing it to a count.
+
+
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_pulls_standalone_conversations(mock_client_cls, tmp_path):
+    mock_client_cls.return_value = _mock_client(
+        {"Project A": True}, standalone={"some-chat-abcd1234.md": "created"}
+    )
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path, prune=True)
+
+    assert report.standalone == {"some-chat-abcd1234.md": "created"}
+    mock_client_cls.return_value.conversations.pull_standalone.assert_called_once_with(
+        tmp_path / "personal" / "conversations", prune=True
+    )
+
+
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_skips_standalone_pull_when_projects_pull_raises(mock_client_cls, tmp_path):
+    """The two calls share one try/except deliberately: a total pull_all failure (not a
+    per-project one — those are isolated inside the SDK) means don't even attempt
+    standalone conversations this run, rather than half-completing the account."""
+    client = _mock_client()
+    client.projects.pull_all.side_effect = OSError("disk full")
+    mock_client_cls.return_value = client
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert not report.ok
+    assert report.standalone == {}
+    client.conversations.pull_standalone.assert_not_called()
 
 
 # ---------------------------------------------------------------------- run_backup
@@ -413,3 +456,41 @@ def test_reconcile_tripwire_refuses_when_most_projects_would_be_removed(tmp_path
     assert removed == []
     for name in ["kept-project", "p2", "p3", "p4", "p5"]:
         assert (account_dir / name).exists()
+
+
+def test_reconcile_keeps_conversations_dir_but_sweeps_stale_files_inside_it(tmp_path):
+    """The account-level conversations/ directory is never itself a project, so it's
+    absent from the project-slug manifest — must not be rmtree'd wholesale, but its own
+    orphan files must still be cleaned up against its own manifest, same as any other
+    docs/conversations subdir."""
+    account_dir = tmp_path / "personal"
+    _write_manifest(account_dir, ["my-project"])
+    (account_dir / "my-project").mkdir(parents=True)
+
+    standalone_dir = account_dir / "conversations"
+    _write_manifest(standalone_dir, ["keep-chat-abcd1234.md"])
+    (standalone_dir / "keep-chat-abcd1234.md").write_text("kept")
+    (standalone_dir / "stale-chat-deadbeef.md").write_text("stale")
+
+    removed = _reconcile_account(account_dir, tmp_path)
+
+    assert standalone_dir.exists()  # never removed wholesale
+    assert (standalone_dir / "keep-chat-abcd1234.md").exists()
+    assert not (standalone_dir / "stale-chat-deadbeef.md").exists()
+    assert str(standalone_dir / "stale-chat-deadbeef.md") in removed
+
+
+def test_reconcile_tripwire_excludes_conversations_dir_from_project_count(tmp_path):
+    """The conversations/ dir must not inflate the tripwire's denominator — a project
+    manifest naming every real project dir should never be refused just because
+    conversations/ (not a project) is also present on disk."""
+    account_dir = tmp_path / "personal"
+    _write_manifest(account_dir, ["kept-project"])
+    (account_dir / "kept-project").mkdir(parents=True)
+    _write_manifest(account_dir / "conversations", [])
+
+    removed = _reconcile_account(account_dir, tmp_path)
+
+    assert (account_dir / "kept-project").exists()
+    assert (account_dir / "conversations").exists()
+    assert removed == []
