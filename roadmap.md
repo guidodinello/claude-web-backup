@@ -27,9 +27,27 @@
   real run found and removed 88 stale docs accumulated before manifests existed; 0 project
   dirs were orphaned. Off by default, gated on a fully successful pull, and recoverable via
   the mirror's git history (deletions land in that night's commit).
-- [ ] **Token auto-refresh.** Session tokens expire after some weeks; today that's handled by
-  failing loudly (non-zero exit + notify-send) and requiring a manual token re-paste into
-  `.env.backup`. Could investigate refresh-token flows if the unofficial API exposes one.
+- [x] **Token auto-refresh** — won't do, decided 2026-09-04 after investigating four angles:
+  1) Impersonating Claude Code's OAuth flow — ruled out: Anthropic explicitly bans using
+     subscription OAuth tokens outside the official Claude Code client (server-side
+     enforcement since 2026-01-09), and it authenticates to the wrong surface anyway
+     (mints a Console API key for the Messages API, not a claude.ai web session).
+  2) Scripting claude.ai's own login flow headlessly — same-surface auth, no ToS issue, but
+     judged too much hassle (login challenge/Cloudflare to reproduce and maintain).
+  3) Checked whether the session cookie has sliding/idle expiry — verified empirically that
+     an authenticated request returns no `Set-Cookie` for `sessionKey` (only Cloudflare's
+     unrelated `__cf_bm`). It's a fixed absolute TTL; the nightly backup's own traffic
+     doesn't extend it.
+  4) Piggybacking on an already-logged-in browser's cookie via extension APIs
+     (`chrome.cookies`/`browser.cookies`, which can read `HttpOnly` cookies) — technically
+     sound and ToS-clean, but this machine only has Firefox installed, and Firefox's
+     unsigned/dev-mode WebExtensions are temporary (unloaded every restart unless
+     submitted through Mozilla's signing process). Combined with needing a bridge to get
+     the cookie out of the extension sandbox, this lands in the same effort bucket as (2).
+
+  Staying with manual re-paste into `.env.backup` on the loud failure — happens once every
+  few weeks, takes 30 seconds by hand. Revisit only if Anthropic ships an official
+  personal-data-export API or Chrome becomes available on this machine.
 - [x] **Revisit coupling with `claude-client`'s pull improvements** — done 2026-09-03,
   alongside the pruning upgrade (same `uv lock --upgrade-package claude-client` to `edf0550`).
   Confirmed via a manual run: the manifest-based incremental pull works as documented, and
