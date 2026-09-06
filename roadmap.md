@@ -56,5 +56,5 @@
   up in this repo yet, since nothing here needed it). `pull_all` still only returns
   `dict[str, bool]`, so a richer per-account report (e.g. what was pruned) remains an
   upstream ask, not something worth hacking around downstream — see `BackupReport.pruned`'s
-  docstring in `backup.py` for why. The progress-bar consolidation
-  (`docs/bugs/pull-progress-bars-accumulate.md`) is still open but cosmetic.
+  docstring in `backup.py` for why. The progress-bar consolidation is fixed upstream — see
+  `claude-client/docs/bugs/pull-progress-bars-accumulate.md`.
