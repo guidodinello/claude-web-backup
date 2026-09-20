@@ -10,9 +10,9 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-from claude_client import AuthError
+from claude_client import AuthError, ProjectPullResult
 from claude_client.render import slugify
-from curl_cffi.requests.exceptions import DNSError
+from curl_cffi.requests.exceptions import DNSError, RequestException
 
 from claude_web_backup.backup import (
     Account,
@@ -79,13 +79,15 @@ def test_load_accounts_ignores_unrelated_env_vars(monkeypatch):
 
 # --------------------------------------------------------------------- backup_account
 #
-# backup_account is a thin wrapper over ClaudeClient.projects.pull_all, which
-# returns dict[project_name, bool]. These tests confirm the wrapper maps that
-# dict into BackupReport correctly; the pull itself is claude-client's job.
+# backup_account is a thin wrapper over ClaudeClient.projects.pull_all, which returns
+# dict[project_name, ProjectPullResult] (truthy on success, .error holds the exception on
+# failure). These tests confirm the wrapper maps that dict into BackupReport correctly,
+# and that a per-project failure triggers one retry pass of the whole account pull before
+# being reported as final — the pull itself is claude-client's job.
 
 
 def _mock_client(
-    results: dict[str, bool] | None = None,
+    results: dict[str, ProjectPullResult] | None = None,
     *,
     auth_error: bool = False,
     standalone: dict[str, str] | None = None,
@@ -101,7 +103,9 @@ def _mock_client(
 
 @patch("claude_web_backup.backup.ClaudeClient")
 def test_backup_account_maps_successful_projects_to_report(mock_client_cls, tmp_path):
-    mock_client_cls.return_value = _mock_client({"Project A": True, "Project B": True})
+    mock_client_cls.return_value = _mock_client(
+        {"Project A": ProjectPullResult(ok=True), "Project B": ProjectPullResult(ok=True)}
+    )
 
     report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
 
@@ -114,15 +118,55 @@ def test_backup_account_maps_successful_projects_to_report(mock_client_cls, tmp_
     )
 
 
+@patch("claude_web_backup.backup.time.sleep")
 @patch("claude_web_backup.backup.ClaudeClient")
-def test_backup_account_collects_failures_alongside_successes(mock_client_cls, tmp_path):
-    mock_client_cls.return_value = _mock_client({"Project A": False, "Project B": True})
+def test_backup_account_collects_failures_alongside_successes(
+    mock_client_cls, mock_sleep, tmp_path
+):
+    """A project still failing after the one retry attempt is reported, with its error."""
+    boom = RequestException("boom")
+    mock_client_cls.return_value = _mock_client(
+        {
+            "Project A": ProjectPullResult(ok=False, error=boom),
+            "Project B": ProjectPullResult(ok=True),
+        }
+    )
 
     report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
 
     assert not report.ok
     assert report.failures == ["personal/Project A"]
     assert report.backed_up == ["personal/Project B"]
+    # the one retry pass: initial pull_all + one retry pull_all
+    assert mock_client_cls.return_value.projects.pull_all.call_count == 2
+    mock_sleep.assert_called_once()
+
+
+@patch("claude_web_backup.backup.time.sleep")
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_retries_and_recovers_a_failed_project(
+    mock_client_cls, mock_sleep, tmp_path
+):
+    """A project failing on the first pass but succeeding on the retry pass is reported
+    as backed up, not as a failure — the whole point of surfacing the exception is so this
+    layer can attempt a retry rather than treating the first pass as final."""
+    client = _mock_client()
+    client.projects.pull_all.side_effect = [
+        {
+            "Project A": ProjectPullResult(ok=False, error=RequestException("timed out")),
+            "Project B": ProjectPullResult(ok=True),
+        },
+        {"Project A": ProjectPullResult(ok=True), "Project B": ProjectPullResult(ok=True)},
+    ]
+    mock_client_cls.return_value = client
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert report.ok
+    assert sorted(report.backed_up) == ["personal/Project A", "personal/Project B"]
+    assert report.failures == []
+    assert client.projects.pull_all.call_count == 2
+    mock_sleep.assert_called_once()
 
 
 @patch("claude_web_backup.backup.ClaudeClient")
@@ -158,7 +202,7 @@ def test_backup_account_retries_transient_network_error_then_succeeds(
     client.projects.pull_all.side_effect = [
         DNSError("Could not resolve host: claude.ai"),
         DNSError("Could not resolve host: claude.ai"),
-        {"Project A": True},
+        {"Project A": ProjectPullResult(ok=True)},
     ]
     mock_client_cls.return_value = client
 
@@ -205,7 +249,7 @@ def test_backup_account_empty_results_is_ok(mock_client_cls, tmp_path):
 @patch("claude_web_backup.backup.ClaudeClient")
 def test_backup_account_pulls_standalone_conversations(mock_client_cls, tmp_path):
     mock_client_cls.return_value = _mock_client(
-        {"Project A": True}, standalone={"some-chat-abcd1234.md": "created"}
+        {"Project A": ProjectPullResult(ok=True)}, standalone={"some-chat-abcd1234.md": "created"}
     )
 
     report = backup_account(Account(slug="personal", token=TOKEN), tmp_path, prune=True)
@@ -276,7 +320,7 @@ def test_run_backup_returns_one_when_any_failure(
 
 @patch("claude_web_backup.backup.ClaudeClient")
 def test_backup_account_threads_prune_to_pull_all(mock_client_cls, tmp_path):
-    mock_client_cls.return_value = _mock_client({"Project A": True})
+    mock_client_cls.return_value = _mock_client({"Project A": ProjectPullResult(ok=True)})
 
     backup_account(Account(slug="personal", token=TOKEN), tmp_path, prune=True)
 
