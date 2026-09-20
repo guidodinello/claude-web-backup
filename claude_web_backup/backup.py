@@ -31,7 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from claude_client import AuthError, ClaudeClient
+from claude_client import AuthError, ClaudeClient, ProjectPullResult
 from curl_cffi.requests.exceptions import RequestException
 from logger import get_logger, init_logging
 
@@ -45,6 +45,12 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 # e.g. the systemd timer firing at boot before the network is actually online.
 _MAX_ATTEMPTS = 4
 _INITIAL_BACKOFF_SECONDS = 5.0
+# pull_all() has no per-project retry entry point — it pulls every project in one call — so
+# a per-project retry means re-running the whole account pull. Bounded to one extra pass:
+# incremental pulls make re-running cheap for projects that already succeeded (unchanged
+# docs/conversations are skipped), but a project still failing after this deserves surfacing
+# in the failure report, not more silent retrying.
+_PROJECT_RETRY_BACKOFF_SECONDS = 10.0
 
 # --reconcile sweep: names claude-client's own manifest sidecar plus the one file it writes
 # unconditionally (project.md is tracked in no manifest). Never touched by the sweep.
@@ -125,6 +131,38 @@ def _retry_with_backoff[T](fn: Callable[[], T]) -> T:
     raise AssertionError("unreachable")
 
 
+def _retry_failed_projects(
+    client: ClaudeClient,
+    out_dir: Path,
+    *,
+    prune: bool,
+    results: dict[str, ProjectPullResult],
+) -> dict[str, ProjectPullResult]:
+    """Retry the account pull once for projects whose result carries an error.
+
+    pull_all() surfaces each project's RequestException via ProjectPullResult.error (see
+    claude-client's own fix for this) instead of silently absorbing it, which is what makes
+    a targeted retry decision possible here at all. There's still no way to pull just the
+    failed subset, so this re-runs pull_all() in full — cheap for the already-succeeded
+    projects, since claude-client's incremental pull skips unchanged docs/conversations.
+    """
+    failed = {name: result for name, result in results.items() if not result}
+    if not failed:
+        return results
+
+    logger.warning(
+        "%d project(s) failed, retrying the account pull once: %s",
+        len(failed),
+        ", ".join(f"{name} ({result.error})" for name, result in failed.items()),
+    )
+    time.sleep(_PROJECT_RETRY_BACKOFF_SECONDS)
+    retry_results = client.projects.pull_all(out_dir, prune=prune)
+    return {
+        **results,
+        **{name: retry_results[name] for name in failed if retry_results.get(name)},
+    }
+
+
 def backup_account(account: Account, out_root: str | Path, *, prune: bool = False) -> BackupReport:
     """Back up every project, plus every standalone conversation, in this account.
 
@@ -139,6 +177,7 @@ def backup_account(account: Account, out_root: str | Path, *, prune: bool = Fals
     client = ClaudeClient(account.token)
     try:
         results = _retry_with_backoff(lambda: client.projects.pull_all(out_dir, prune=prune))
+        results = _retry_failed_projects(client, out_dir, prune=prune, results=results)
         report.standalone = _retry_with_backoff(
             lambda: client.conversations.pull_standalone(out_dir / "conversations", prune=prune)
         )
@@ -154,14 +193,13 @@ def backup_account(account: Account, out_root: str | Path, *, prune: bool = Fals
     if not results:
         logger.warning("Account '%s': no projects found in any chat-capable org", account.slug)
 
-    for name, ok in results.items():
+    for name, result in results.items():
         label = f"{account.slug}/{name}"
-        if ok:
+        if result:
             report.backed_up.append(label)
             logger.info("Backed up %s", label)
         else:
-            # Per-project failure detail was already logged by export_all_projects_to_dir.
-            logger.error("Failed to back up %s", label)
+            logger.error("Failed to back up %s: %s", label, result.error)
             report.failures.append(label)
 
     return report

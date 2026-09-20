@@ -53,8 +53,19 @@
   Confirmed via a manual run: the manifest-based incremental pull works as documented, and
   the semantic change is real — "web is source of truth" becomes "web is source of truth
   *when it changed*" (a local edit now survives unless `force=True`; `--force` isn't wired
-  up in this repo yet, since nothing here needed it). `pull_all` still only returns
-  `dict[str, bool]`, so a richer per-account report (e.g. what was pruned) remains an
-  upstream ask, not something worth hacking around downstream — see `BackupReport.pruned`'s
-  docstring in `backup.py` for why. The progress-bar consolidation is fixed upstream — see
-  `claude-client/docs/bugs/pull-progress-bars-accumulate.md`.
+  up in this repo yet, since nothing here needed it). The progress-bar consolidation is
+  fixed upstream — see `claude-client/docs/bugs/pull-progress-bars-accumulate.md`. A richer
+  per-account report (e.g. what was pruned) remains an upstream ask, not something worth
+  hacking around downstream — see `BackupReport.pruned`'s docstring in `backup.py` for why.
+- [x] **Surface and retry per-project pull failures** — done 2026-09-20, upstream +
+  downstream: a real production failure (30s HTTP timeouts on 3 projects in one nightly
+  run) turned out to be undiagnosable because `pull_all` swallowed the `RequestException`
+  entirely — no log detail, no return value. Fixed in `claude-client` (`#24`): `pull_all`
+  now returns `dict[str, ProjectPullResult]` (truthy on success, `.error` holds the
+  exception), and the same "log the exception" fix was applied to the 3 other per-item
+  `RequestException` sites it was missing from, plus the corrupt-manifest log in
+  `_manifest.py`. This repo (`#14`) bumped the lock, added one bounded retry pass in
+  `backup_account` for any project whose result carries an error (cheap thanks to the
+  incremental pull — already-succeeded projects are a no-op on the retry), and fixed its
+  own analogous silent-swallow in `_manifest_filenames` (fed `--reconcile`'s deletion-safety
+  sweep with zero trail on a corrupt manifest).
