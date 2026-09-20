@@ -178,7 +178,8 @@ def _manifest_filenames(directory: Path) -> set[str] | None:
         return None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Unreadable manifest %s, treating as unknown: %s", path, exc)
         return None
     return {entry["filename"] for entry in raw.values() if isinstance(entry, dict)}
 
