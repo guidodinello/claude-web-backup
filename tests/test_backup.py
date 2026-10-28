@@ -7,6 +7,7 @@ are claude-client's own test coverage, not duplicated here.
 """
 
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,6 +18,7 @@ from curl_cffi.requests.exceptions import DNSError, RequestException
 from claude_web_backup.backup import (
     Account,
     _env_flag,
+    _notify,
     _reconcile_account,
     backup_account,
     load_accounts,
@@ -313,6 +315,20 @@ def test_run_backup_returns_one_when_any_failure(
 
     assert run_backup(tmp_path) == 1
     mock_notify.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        FileNotFoundError("notify-send"),
+        subprocess.TimeoutExpired(["notify-send"], timeout=5),
+    ],
+)
+@patch("claude_web_backup.backup.subprocess.run")
+def test_notify_is_best_effort(mock_run, error):
+    mock_run.side_effect = error
+
+    _notify("backup failed")  # must not raise
 
 
 # ------------------------------------------------------------------------- prune
