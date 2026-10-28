@@ -314,7 +314,9 @@ def _reconcile_account(account_dir: Path, backup_root: Path) -> list[str]:
 
 def _notify(message: str) -> None:
     """Best-effort desktop notification. No-op if notify-send is unavailable (e.g. headless)."""
-    with contextlib.suppress(FileNotFoundError, OSError):
+    # SubprocessError covers TimeoutExpired: a hung notify-send (e.g. right after resume,
+    # before the desktop session is responsive) must not crash the run.
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
         subprocess.run(["notify-send", "Claude backup failed", message], check=False, timeout=5)
 
 
