@@ -240,8 +240,7 @@ def _failed_attachments(account_slug: str, out_dir: Path, standalone: dict[str, 
         conversations_dir = out_dir / slug / "conversations"
         entries = _load_manifest(conversations_dir) or {}
         failures += [
-            f"{account_slug}/{slug}/conversations/{entry.get('filename', uuid)}: "
-            "image download failed"
+            f"{account_slug}/{slug}/conversations/{entry['filename']}: image download failed"
             for uuid, entry in sorted(entries.items())
             if _ATTACHMENTS_KEY in entry and entry.get("updated_at") == ""
         ]
@@ -264,10 +263,17 @@ def _load_manifest(directory: Path) -> dict[str, dict] | None:
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Unreadable manifest %s, treating as unknown: %s", path, exc)
         return None
-    if not isinstance(raw, dict):
+    entries = (
+        {uuid: entry for uuid, entry in raw.items() if isinstance(entry, dict)}
+        if isinstance(raw, dict)
+        else None
+    )
+    if entries is None or any(
+        not isinstance(entry.get("filename"), str) for entry in entries.values()
+    ):
         logger.warning("Unexpected manifest shape in %s, treating as unknown", path)
         return None
-    return {uuid: entry for uuid, entry in raw.items() if isinstance(entry, dict)}
+    return entries
 
 
 def _manifest_filenames(directory: Path) -> set[str] | None:

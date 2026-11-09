@@ -769,3 +769,19 @@ def test_run_backup_failed_image_exits_nonzero_notifies_and_skips_reconcile(
     assert run_backup(tmp_path, reconcile=True) == 1
     mock_notify.assert_called_once()
     mock_reconcile.assert_not_called()
+
+
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_tolerates_malformed_conversations_manifest(mock_client_cls, tmp_path):
+    """The failure scan runs on every backup, so an odd manifest must not raise."""
+    account_dir = tmp_path / "personal"
+    _write_manifest(account_dir, ["my-project"])
+    _write_conversations_manifest(
+        account_dir / "my-project" / "conversations",
+        {"conv-a": {"updated_at": "", "attachments": []}},  # no filename
+    )
+    mock_client_cls.return_value = _mock_client({"My Project": ProjectPullResult(ok=True)})
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert report.ok
