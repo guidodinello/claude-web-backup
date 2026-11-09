@@ -554,3 +554,234 @@ def test_reconcile_tripwire_excludes_conversations_dir_from_project_count(tmp_pa
     assert (account_dir / "kept-project").exists()
     assert (account_dir / "conversations").exists()
     assert removed == []
+
+
+# --------------------------------------------------------- attachments (conversation images)
+#
+# claude-client saves images under conversations/attachments/<conv_uuid>/ and lists each
+# conversation's saved paths in its manifest entry's `attachments` field.
+
+
+def _write_conversations_manifest(directory, entries: dict[str, dict]) -> None:
+    """Write a conversations manifest verbatim: {uuid: {filename, updated_at, attachments?}}."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / ".claude-pull-manifest.json").write_text(json.dumps(entries), encoding="utf-8")
+
+
+def _write_image(conversations_dir, conv_uuid: str, name: str):
+    path = conversations_dir / "attachments" / conv_uuid / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"webp")
+    return path
+
+
+@pytest.fixture
+def project_conversations(tmp_path):
+    """An account with one project whose conversations dir has one kept conversation."""
+    account_dir = tmp_path / "personal"
+    _write_manifest(account_dir, ["my-project"])
+    conversations_dir = account_dir / "my-project" / "conversations"
+    conversations_dir.mkdir(parents=True)
+    (conversations_dir / "chat-aaaa1111.md").write_text("kept")
+    return account_dir, conversations_dir
+
+
+def test_reconcile_keeps_listed_attachments(tmp_path, project_conversations):
+    account_dir, conversations_dir = project_conversations
+    kept = _write_image(conversations_dir, "conv-a", "file-1-shot.webp")
+    _write_conversations_manifest(
+        conversations_dir,
+        {
+            "conv-a": {
+                "filename": "chat-aaaa1111.md",
+                "updated_at": "2026-11-08T00:00:00Z",
+                "attachments": ["attachments/conv-a/file-1-shot.webp"],
+            }
+        },
+    )
+
+    removed = _reconcile_account(account_dir, tmp_path)
+
+    assert removed == []
+    assert kept.exists()
+    assert (conversations_dir / "chat-aaaa1111.md").exists()
+
+
+def test_reconcile_removes_unlisted_attachment_and_vanished_conversation_dir(
+    tmp_path, project_conversations
+):
+    account_dir, conversations_dir = project_conversations
+    kept = _write_image(conversations_dir, "conv-a", "file-1-shot.webp")
+    unlisted = _write_image(conversations_dir, "conv-a", "file-2-stale.webp")
+    vanished = _write_image(conversations_dir, "conv-gone", "file-3-old.webp")
+    _write_conversations_manifest(
+        conversations_dir,
+        {
+            "conv-a": {
+                "filename": "chat-aaaa1111.md",
+                "updated_at": "2026-11-08T00:00:00Z",
+                "attachments": ["attachments/conv-a/file-1-shot.webp"],
+            }
+        },
+    )
+
+    removed = _reconcile_account(account_dir, tmp_path)
+
+    assert kept.exists()
+    assert not unlisted.exists()
+    assert not vanished.parent.exists()
+    assert sorted(removed) == sorted([str(unlisted), str(vanished.parent)])
+
+
+def test_reconcile_leaves_attachments_untouched_for_pre_attachments_manifest(
+    tmp_path, project_conversations
+):
+    """An entry without an `attachments` field (written by an older claude-client) means
+    the manifest doesn't know which images belong — fail closed, delete nothing under
+    attachments/, while the .md sweep itself still runs."""
+    account_dir, conversations_dir = project_conversations
+    image = _write_image(conversations_dir, "conv-a", "file-1-shot.webp")
+    other = _write_image(conversations_dir, "conv-gone", "file-3-old.webp")
+    (conversations_dir / "stale-deadbeef.md").write_text("stale")
+    _write_manifest(conversations_dir, ["chat-aaaa1111.md"])  # no `attachments` fields
+
+    removed = _reconcile_account(account_dir, tmp_path)
+
+    assert image.exists()
+    assert other.exists()
+    assert removed == [str(conversations_dir / "stale-deadbeef.md")]
+
+
+def test_reconcile_leaves_attachments_untouched_when_one_entry_lacks_the_field(
+    tmp_path, project_conversations
+):
+    account_dir, conversations_dir = project_conversations
+    vanished = _write_image(conversations_dir, "conv-gone", "file-3-old.webp")
+    _write_conversations_manifest(
+        conversations_dir,
+        {
+            "conv-a": {"filename": "chat-aaaa1111.md", "updated_at": "", "attachments": []},
+            "conv-b": {"filename": "chat-bbbb2222.md", "updated_at": ""},
+        },
+    )
+
+    _reconcile_account(account_dir, tmp_path)
+
+    assert vanished.exists()
+
+
+def test_reconcile_leaves_attachments_untouched_when_manifest_missing(
+    tmp_path, project_conversations
+):
+    account_dir, conversations_dir = project_conversations
+    image = _write_image(conversations_dir, "conv-a", "file-1-shot.webp")
+
+    removed = _reconcile_account(account_dir, tmp_path)
+
+    assert removed == []
+    assert image.exists()
+
+
+def test_reconcile_sweeps_standalone_attachments(tmp_path):
+    account_dir = tmp_path / "personal"
+    _write_manifest(account_dir, [])
+    standalone_dir = account_dir / "conversations"
+    (standalone_dir).mkdir(parents=True)
+    (standalone_dir / "chat-aaaa1111.md").write_text("kept")
+    kept = _write_image(standalone_dir, "conv-a", "file-1-shot.webp")
+    vanished = _write_image(standalone_dir, "conv-gone", "file-3-old.webp")
+    _write_conversations_manifest(
+        standalone_dir,
+        {
+            "conv-a": {
+                "filename": "chat-aaaa1111.md",
+                "updated_at": "2026-11-08T00:00:00Z",
+                "attachments": ["attachments/conv-a/file-1-shot.webp"],
+            }
+        },
+    )
+
+    removed = _reconcile_account(account_dir, tmp_path)
+
+    assert kept.exists()
+    assert removed == [str(vanished.parent)]
+
+
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_counts_failed_standalone_image_as_failure(mock_client_cls, tmp_path):
+    mock_client_cls.return_value = _mock_client(
+        {"Project A": ProjectPullResult(ok=True)},
+        standalone={
+            "chat-aaaa1111.md": "updated",
+            "attachments/conv-a/file-1-shot.webp": "created",
+            "attachments/conv-a/file-2-broken": "failed",
+        },
+    )
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert not report.ok
+    assert report.backed_up == ["personal/Project A"]
+    assert report.failures == [
+        "personal/conversations/attachments/conv-a/file-2-broken: image download failed"
+    ]
+    assert report.standalone_conversations == 1
+
+
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_counts_failed_project_image_as_failure(mock_client_cls, tmp_path):
+    """pull_all doesn't expose per-file results, so a project conversation's failed image
+    is read from claude-client's retry marker: an entry with `attachments` whose
+    `updated_at` was blanked. An old-shape entry (no `attachments`) is not a failure."""
+    account_dir = tmp_path / "personal"
+    _write_manifest(account_dir, ["my-project"])
+    _write_conversations_manifest(
+        account_dir / "my-project" / "conversations",
+        {
+            "conv-a": {"filename": "ok-aaaa1111.md", "updated_at": "t", "attachments": []},
+            "conv-b": {"filename": "broken-bbbb2222.md", "updated_at": "", "attachments": []},
+            "conv-c": {"filename": "legacy-cccc3333.md", "updated_at": ""},
+        },
+    )
+    mock_client_cls.return_value = _mock_client({"My Project": ProjectPullResult(ok=True)})
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert not report.ok
+    assert report.backed_up == ["personal/My Project"]
+    assert report.failures == [
+        "personal/my-project/conversations/broken-bbbb2222.md: image download failed"
+    ]
+
+
+@patch("claude_web_backup.backup._notify")
+@patch("claude_web_backup.backup._reconcile_account")
+@patch("claude_web_backup.backup.load_accounts")
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_run_backup_failed_image_exits_nonzero_notifies_and_skips_reconcile(
+    mock_client_cls, mock_accounts, mock_reconcile, mock_notify, tmp_path
+):
+    mock_accounts.return_value = [Account(slug="personal", token=TOKEN)]
+    mock_client_cls.return_value = _mock_client(
+        standalone={"attachments/conv-a/file-2-broken": "failed"}
+    )
+
+    assert run_backup(tmp_path, reconcile=True) == 1
+    mock_notify.assert_called_once()
+    mock_reconcile.assert_not_called()
+
+
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_tolerates_malformed_conversations_manifest(mock_client_cls, tmp_path):
+    """The failure scan runs on every backup, so an odd manifest must not raise."""
+    account_dir = tmp_path / "personal"
+    _write_manifest(account_dir, ["my-project"])
+    _write_conversations_manifest(
+        account_dir / "my-project" / "conversations",
+        {"conv-a": {"updated_at": "", "attachments": []}},  # no filename
+    )
+    mock_client_cls.return_value = _mock_client({"My Project": ProjectPullResult(ok=True)})
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert report.ok

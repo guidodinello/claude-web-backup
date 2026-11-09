@@ -29,7 +29,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from claude_client import AuthError, ClaudeClient, ProjectPullResult
 from curl_cffi.requests.exceptions import RequestException
@@ -70,6 +70,15 @@ _MAX_PRUNE_FRACTION = 0.2
 # resolver has no reserved-name list) — a known, accepted edge case, not engineered around.
 _RESERVED_ACCOUNT_DIRS = frozenset({"conversations"})
 
+# claude-client saves conversation images under `conversations/attachments/<conv_uuid>/`,
+# recording each conversation's saved paths (relative to the conversations dir) in its
+# manifest entry's `attachments` field. A download that failed is reported as "failed" in
+# the pull results (standalone) and leaves the entry with an empty `updated_at` so the
+# next pull retries it (the only trace pull_all leaves for project conversations).
+_ATTACHMENTS_DIR = "attachments"
+_ATTACHMENTS_KEY = "attachments"
+_FAILED_STATUS = "failed"
+
 
 @dataclass
 class Account:
@@ -88,8 +97,14 @@ class BackupReport:
     pruned: list[str] = field(default_factory=list)
     # Filled directly from pull_standalone()'s own return value — a real, complete
     # per-conversation record (unlike pull_all's discarded per-project detail), since
-    # pull_standalone actually returns one: filename -> created/updated/unchanged/deleted.
+    # pull_standalone actually returns one: filename -> created/updated/unchanged/deleted,
+    # plus `attachments/...` keys for images (created/deleted, or "failed").
     standalone: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def standalone_conversations(self) -> int:
+        """Conversation files in `standalone`, excluding its `attachments/...` keys."""
+        return sum(1 for key in self.standalone if not key.startswith(f"{_ATTACHMENTS_DIR}/"))
 
     @property
     def ok(self) -> bool:
@@ -202,11 +217,40 @@ def backup_account(account: Account, out_root: str | Path, *, prune: bool = Fals
             logger.error("Failed to back up %s: %s", label, result.error)
             report.failures.append(label)
 
+    report.failures += _failed_attachments(account.slug, out_dir, report.standalone)
     return report
 
 
-def _manifest_filenames(directory: Path) -> set[str] | None:
-    """Filenames claude-client's manifest claims for `directory`, or None if unknown.
+def _failed_attachments(account_slug: str, out_dir: Path, standalone: dict[str, str]) -> list[str]:
+    """One failure label per image download that failed this run, for the whole account.
+
+    Standalone conversations report it directly ("failed" under the image's path stem).
+    pull_all discards per-project file results (ProjectPullResult carries only ok/error),
+    so for project conversations the only trace is claude-client's retry marker in the
+    conversations manifest: an entry scanned for attachments whose `updated_at` was blanked.
+    One label per such conversation, since the stems themselves aren't recorded there.
+    Never raises on a missing/odd manifest — a failed image must not abort anything else.
+    """
+    failures = [
+        f"{account_slug}/conversations/{key}: image download failed"
+        for key, status in standalone.items()
+        if status == _FAILED_STATUS
+    ]
+    for slug in sorted(_manifest_filenames(out_dir) or ()):
+        conversations_dir = out_dir / slug / "conversations"
+        entries = _load_manifest(conversations_dir) or {}
+        failures += [
+            f"{account_slug}/{slug}/conversations/{entry['filename']}: image download failed"
+            for uuid, entry in sorted(entries.items())
+            if _ATTACHMENTS_KEY in entry and entry.get("updated_at") == ""
+        ]
+    for failure in failures:
+        logger.error("Failed to back up %s", failure)
+    return failures
+
+
+def _load_manifest(directory: Path) -> dict[str, dict] | None:
+    """claude-client's manifest for `directory` as {uuid: entry}, or None if unknown.
 
     None means "we have no idea what belongs here" — callers must not delete anything
     in that case. A missing/corrupt manifest is never read as "everything is stale".
@@ -219,7 +263,85 @@ def _manifest_filenames(directory: Path) -> set[str] | None:
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Unreadable manifest %s, treating as unknown: %s", path, exc)
         return None
-    return {entry["filename"] for entry in raw.values() if isinstance(entry, dict)}
+    entries = (
+        {uuid: entry for uuid, entry in raw.items() if isinstance(entry, dict)}
+        if isinstance(raw, dict)
+        else None
+    )
+    if entries is None or any(
+        not isinstance(entry.get("filename"), str) for entry in entries.values()
+    ):
+        logger.warning("Unexpected manifest shape in %s, treating as unknown", path)
+        return None
+    return entries
+
+
+def _manifest_filenames(directory: Path) -> set[str] | None:
+    """Filenames claude-client's manifest claims for `directory`, or None if unknown."""
+    entries = _load_manifest(directory)
+    if entries is None:
+        return None
+    return {entry["filename"] for entry in entries.values()}
+
+
+def _attachment_keep_set(entries: dict[str, dict]) -> dict[str, set[str]] | None:
+    """{conv_uuid: {image filename}} the manifest claims under `attachments/`, or None.
+
+    None (fail closed: keep everything under attachments/) unless every entry has a
+    well-formed `attachments` list whose paths are all `attachments/<that uuid>/<name>`.
+    An entry without the field was written by a pre-attachments client, so its images
+    (if any) are simply not known yet.
+    """
+    keep: dict[str, set[str]] = {}
+    for uuid, entry in entries.items():
+        paths = entry.get(_ATTACHMENTS_KEY)
+        if not isinstance(paths, list) or uuid in {"", ".", ".."}:
+            return None
+        names = set()
+        for relpath in paths:
+            if not isinstance(relpath, str):
+                return None
+            parts = PurePosixPath(relpath).parts
+            if len(parts) != 3 or parts[:2] != (_ATTACHMENTS_DIR, uuid):
+                return None
+            names.add(parts[2])
+        keep[uuid] = names
+    return keep
+
+
+def _reconcile_conversations_dir(conversations_dir: Path) -> list[str]:
+    """Sweep a conversations dir and its `attachments/` tree against its manifest.
+
+    `attachments/` itself is never removed wholesale. Inside it, a uuid dir of a
+    conversation absent from the manifest goes, and so does any file not listed for its
+    conversation — but only when the manifest fully describes the attachments (see
+    `_attachment_keep_set`); otherwise nothing under `attachments/` is touched.
+    """
+    entries = _load_manifest(conversations_dir)
+    if entries is None:
+        logger.warning("Reconcile: no manifest in %s — skipping", conversations_dir)
+        return []
+    filenames = {entry["filename"] for entry in entries.values()}
+    removed = _sweep(conversations_dir, filenames | {_ATTACHMENTS_DIR})
+
+    attachments_dir = conversations_dir / _ATTACHMENTS_DIR
+    if not attachments_dir.is_dir():
+        return removed
+    keep = _attachment_keep_set(entries)
+    if keep is None:
+        logger.warning(
+            "Reconcile: manifest in %s doesn't list attachments for every conversation "
+            "(pre-attachments pull?) — leaving %s untouched",
+            conversations_dir,
+            attachments_dir,
+        )
+        return removed
+    removed += _sweep(attachments_dir, set(keep))
+    for uuid, names in sorted(keep.items()):
+        conversation_attachments = attachments_dir / uuid
+        if conversation_attachments.is_dir():
+            removed += _sweep(conversation_attachments, names)
+    return removed
 
 
 def _sweep(directory: Path, keep: set[str]) -> list[str]:
@@ -287,26 +409,22 @@ def _reconcile_account(account_dir: Path, backup_root: Path) -> list[str]:
         project_dir = account_dir / slug
         if not project_dir.is_dir():
             continue
-        for sub in ("docs", "conversations"):
-            sub_dir = project_dir / sub
-            if not sub_dir.is_dir():
-                continue
-            names = _manifest_filenames(sub_dir)
+        docs_dir = project_dir / "docs"
+        if docs_dir.is_dir():
+            names = _manifest_filenames(docs_dir)
             if names is None:
-                logger.warning("Reconcile: no manifest in %s — skipping", sub_dir)
-                continue
-            removed += _sweep(sub_dir, names)
+                logger.warning("Reconcile: no manifest in %s — skipping", docs_dir)
+            else:
+                removed += _sweep(docs_dir, names)
+        if (project_dir / "conversations").is_dir():
+            removed += _reconcile_conversations_dir(project_dir / "conversations")
 
     # Account-level standalone conversations: reserved from wholesale removal above, but
     # still swept internally against its own manifest — same treatment as a project's
-    # docs/conversations subdir, just one level up.
+    # conversations subdir, just one level up.
     standalone_dir = account_dir / "conversations"
     if standalone_dir.is_dir():
-        names = _manifest_filenames(standalone_dir)
-        if names is None:
-            logger.warning("Reconcile: no manifest in %s — skipping", standalone_dir)
-        else:
-            removed += _sweep(standalone_dir, names)
+        removed += _reconcile_conversations_dir(standalone_dir)
 
     logger.info("Reconcile: %d orphan(s) removed under %s", len(removed), account_dir)
     return removed
@@ -343,7 +461,7 @@ def run_backup(
     for account in accounts:
         report = backup_account(account, out_dir, prune=prune)
         total_backed_up += len(report.backed_up)
-        total_standalone += len(report.standalone)
+        total_standalone += report.standalone_conversations
         all_failures.extend(report.failures)
 
         if reconcile:
