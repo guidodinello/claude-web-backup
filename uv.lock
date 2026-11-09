@@ -96,7 +96,7 @@ wheels = [
 [[package]]
 name = "claude-client"
 version = "0.1.0"
-source = { git = "https://github.com/guidodinello/claude-client?branch=main#042de980be2df1f880b1b48450c36ac51b174861" }
+source = { git = "https://github.com/guidodinello/claude-client?branch=main#5a241673e06e927f600b89e3884f10c457a86aa6" }
 dependencies = [
     { name = "curl-cffi" },
     { name = "logger" },

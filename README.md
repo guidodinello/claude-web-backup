@@ -30,10 +30,13 @@ orchestration, config, and scheduling on top of it.
 $CLAUDE_BACKUP_DIR/
   personal/
     conversations/         # standalone (non-project) chats, one .md per conversation
+      attachments/
+        {conversation-uuid}/   # images uploaded to that chat (webp previews), linked from its .md
     {project-slug}/
       project.md          # title, description, instructions, memory, controls
       docs/                # knowledge files
       conversations/        # one .md per conversation in this project
+        attachments/{conversation-uuid}/   # that conversation's images, same as above
   work/
     {project-slug}/ ...
 ```
@@ -43,6 +46,11 @@ Note: a project literally named "Conversations" would slugify to `{project-slug}
 slug resolver has no reserved-name list). A known, accepted edge case — none of this
 account's projects hit it — rather than something engineered around. `--reconcile` is
 hardened so it can never delete the `conversations/` directory outright either way.
+
+Images are claude-client's compressed webp previews (no endpoint for the original upload is
+known). The per-conversation directory is keyed on the conversation uuid, so a renamed
+conversation keeps its images and links. Each conversation's saved image paths are recorded
+in its entry's `attachments` field in the conversations dir's `.claude-pull-manifest.json`.
 
 `{account_slug}` comes from the `CLAUDE_BACKUP_TOKEN_<SLUG>` env var name (lowercased).
 `{project-slug}` is the sanitized project name (`claude_client.render.slugify`), kept stable
@@ -93,6 +101,17 @@ is worse than none. Failures are logged and (best-effort, if `notify-send` is av
 surfaced as a desktop notification. One failing project never aborts the rest of the run;
 failures are collected and reported at the end.
 
+A failed image download counts as a failure too (exit 1, notification, `--reconcile`
+skipped for that account), but never aborts anything else: the conversation is still
+written, with an `[Image not downloaded: …]` placeholder, and claude-client retries the
+image on the next run. Standalone conversations report the exact image; for project
+conversations `pull_all` exposes no per-file results, so the failure is read from
+claude-client's retry marker in the conversations manifest (an entry with `attachments`
+and a blanked `updated_at`) and reported per conversation. An image that fails permanently
+therefore fails every nightly run until it succeeds or its conversation is gone; without
+`--prune`, a conversation deleted on the web keeps its manifest entry, so its failed image
+keeps being reported until a `--prune` run drops it.
+
 A transient network error (DNS not resolving, connection refused, timeout — e.g. the
 nightly timer firing right as the machine wakes up, before Wi-Fi has actually come up) is
 retried with exponential backoff (4 attempts, starting at 5s) before being counted as a
@@ -119,12 +138,27 @@ Off by default. Two ways to enable it:
   tripwire against sweeping on a partial/broken pull) — see `_reconcile_account` in
   `backup.py`.
 
+  Inside each conversations dir, `attachments/` is likewise never removed wholesale. Within
+  it, the sweep removes a `{conversation-uuid}/` dir whose conversation is absent from that
+  dir's manifest, and any image file not listed in its conversation's `attachments` field.
+  It fails closed: if the manifest is missing or unreadable, or any entry lacks a
+  well-formed `attachments` field (a manifest written by a pre-attachments claude-client),
+  nothing under `attachments/` is touched — the `.md` sweep still runs. Docs dirs have no
+  attachments and are swept as before.
+
 **Gotcha: the first `--prune` run only seeds manifests, it doesn't delete anything.**
 claude-client's prune only removes entries that were in a *previous* manifest; a mirror with
 no manifests yet (e.g. this repo's history before this feature) has nothing to diff against.
 That first run is harmless and necessary — after it, `--prune` prunes going forward. Any
 orphans that predate the first manifest are cleaned up once via `--reconcile`, not by
 `--prune`.
+
+**Gotcha: the first run after the image-attachments client bump re-fetches everything.**
+Manifest entries written by the older claude-client have no `attachments` field, so the
+first backup after the bump re-fetches every conversation once (a burst of requests on a
+large account) and downloads all its images. Conversations without images re-render
+identically and report `unchanged`. Don't roll the `claude-client` lock back afterwards:
+an older client reads the new conversations manifests as corrupt and starts them fresh.
 
 **There's no dry-run for `--prune`** — claude-client deletes internally and offers no
 preview hook. Lean on git instead: run manually, inspect before the nightly
