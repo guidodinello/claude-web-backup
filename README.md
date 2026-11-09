@@ -208,6 +208,23 @@ git -C "$CLAUDE_BACKUP_DIR" diff <commit>~1 <commit>   # what changed that night
 git -C "$CLAUDE_BACKUP_DIR" fsck                 # sanity-check the repository
 ```
 
+### Second copy on another disk (optional)
+
+Set `CLAUDE_BACKUP_MIRROR` in `.env.backup` to a bare git repo on another disk (e.g. a USB
+HDD), and `scripts/commit-backup.sh` pushes every snapshot there after committing. When
+the disk isn't mounted the push is skipped with a log line, never an error, and the next
+run pushes everything it missed. The primary backup stays on the local disk, so the timer
+never depends on the drive being plugged in and there is only ever one history.
+
+The script never creates the mirror (so an unmounted mountpoint can't silently turn into a
+"mirror" on the local disk); create it once:
+
+```bash
+git clone --bare "$CLAUDE_BACKUP_DIR" /media/guido/<disk>/claude-backup.git
+```
+
+Restore from it with a plain `git clone`.
+
 Install:
 
 ```bash
