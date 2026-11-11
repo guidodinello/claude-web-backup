@@ -93,6 +93,7 @@ def _mock_client(
     *,
     auth_error: bool = False,
     standalone: dict[str, str] | None = None,
+    memory: dict[str, str] | None = None,
 ) -> MagicMock:
     client = MagicMock()
     if auth_error:
@@ -100,6 +101,7 @@ def _mock_client(
     else:
         client.projects.pull_all.return_value = results or {}
     client.conversations.pull_standalone.return_value = standalone or {}
+    client.memory.pull.return_value = memory or {}
     return client
 
 
@@ -276,6 +278,76 @@ def test_backup_account_skips_standalone_pull_when_projects_pull_raises(mock_cli
     assert not report.ok
     assert report.standalone == {}
     client.conversations.pull_standalone.assert_not_called()
+
+
+# ---------------------------------------------------------------- backup_account: memory
+#
+# client.memory.pull returns dict["{org_id}{path}", status] for Claude.ai's per-entry
+# memory files. The mirroring itself (manifest, version skip, path safety, prune) is
+# claude-client's job; here we check the call and how its statuses map to failures.
+
+
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_pulls_memory_into_account_memory_dir(mock_client_cls, tmp_path):
+    memory = {"org-1/profile.md": "created", "org-1/topics/car.md": "unchanged"}
+    mock_client_cls.return_value = _mock_client(
+        {"Project A": ProjectPullResult(ok=True)}, memory=memory
+    )
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path, prune=True)
+
+    assert report.ok
+    assert report.memory == memory
+    mock_client_cls.return_value.memory.pull.assert_called_once_with(
+        tmp_path / "personal" / "memory", prune=True
+    )
+
+
+@pytest.mark.parametrize("status", ["failed", "rejected"])
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_reports_failed_or_rejected_memory_files(mock_client_cls, status, tmp_path):
+    mock_client_cls.return_value = _mock_client(
+        {"Project A": ProjectPullResult(ok=True)},
+        memory={"org-1/profile.md": "updated", "org-1/people/x.md": status},
+    )
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert not report.ok
+    assert report.failures == [f"personal/memory/org-1/people/x.md: {status}"]
+    assert report.backed_up == ["personal/Project A"]
+
+
+@patch("claude_web_backup.backup.ClaudeClient")
+def test_backup_account_memory_listing_error_fails_the_account(mock_client_cls, tmp_path):
+    """A melange/list error other than a 404 propagates out of memory.pull; it must fail
+    the account rather than pass silently with an empty memory record."""
+    client = _mock_client({"Project A": ProjectPullResult(ok=True)})
+    client.memory.pull.side_effect = OSError("disk full")
+    mock_client_cls.return_value = client
+
+    report = backup_account(Account(slug="personal", token=TOKEN), tmp_path)
+
+    assert not report.ok
+    assert report.failures == ["personal: disk full"]
+
+
+def test_reconcile_never_removes_the_memory_dir(tmp_path):
+    """memory/ is not a project, so it's absent from the project manifest, but the sweep
+    must leave it (and everything claude-client mirrored into it) alone."""
+    account_dir = tmp_path / "personal"
+    (account_dir / "project-a").mkdir(parents=True)
+    (account_dir / ".claude-pull-manifest.json").write_text(
+        json.dumps({"uuid-a": {"filename": "project-a", "updated_at": "x"}})
+    )
+    memory_file = account_dir / "memory" / "org-1" / "profile.md"
+    memory_file.parent.mkdir(parents=True)
+    memory_file.write_text("---\nname: Profile\n---\n")
+
+    removed = _reconcile_account(account_dir, tmp_path)
+
+    assert removed == []
+    assert memory_file.read_text() == "---\nname: Profile\n---\n"
 
 
 # ---------------------------------------------------------------------- run_backup

@@ -10,7 +10,9 @@ Env-driven so it runs unattended (systemd timer, cron, etc.):
 
 Layout written: ``{out}/{account_slug}/{project_slug}/{project.md,docs/,conversations/}``,
 plus ``{out}/{account_slug}/conversations/`` for standalone (non-project) chats, pulled
-account-wide across every chat-capable org via ``client.conversations.pull_standalone``.
+account-wide across every chat-capable org via ``client.conversations.pull_standalone``,
+and ``{out}/{account_slug}/memory/{org_id}/...`` for Claude.ai's per-entry memory files
+(profile, topics, people, per-project entries), mirrored via ``client.memory.pull``.
 By default this mirrors ``pull_all``'s accumulate-only semantics — it overwrites but never
 deletes, so the backup only ever grows. Pass ``--prune``/``CLAUDE_BACKUP_PRUNE=1`` to also
 delete local files/directories removed on the web (claude-client does the deleting; see its
@@ -68,7 +70,12 @@ _MAX_PRUNE_FRACTION = 0.2
 # its own manifest, just like any project's docs/conversations subdir. A project literally
 # named "Conversations" would collide with this reserved name (claude-client's slug
 # resolver has no reserved-name list) — a known, accepted edge case, not engineered around.
-_RESERVED_ACCOUNT_DIRS = frozenset({"conversations"})
+#
+# "memory" is reserved the same way, but the sweep never goes inside it: claude-client's
+# memory pull keeps one manifest per org dir, keyed by remote path, and does its own
+# pruning, so there's no orphan backlog for --reconcile to clean up there.
+_MEMORY_DIR = "memory"
+_RESERVED_ACCOUNT_DIRS = frozenset({"conversations", _MEMORY_DIR})
 
 # claude-client saves conversation images under `conversations/attachments/<conv_uuid>/`,
 # recording each conversation's saved paths (relative to the conversations dir) in its
@@ -77,6 +84,12 @@ _RESERVED_ACCOUNT_DIRS = frozenset({"conversations"})
 # next pull retries it (the only trace pull_all leaves for project conversations).
 _ATTACHMENTS_DIR = "attachments"
 _ATTACHMENTS_KEY = "attachments"
+
+# client.memory.pull statuses that mean a memory file wasn't backed up this run: "failed"
+# (the read errored; the previous local copy is kept and retried next run) and "rejected"
+# (an unsafe remote path claude-client refused to write).
+_MEMORY_FAILED_STATUSES = frozenset({"failed", "rejected"})
+_MEMORY_OK_STATUSES = frozenset({"created", "updated", "unchanged"})
 _FAILED_STATUS = "failed"
 
 
@@ -100,6 +113,9 @@ class BackupReport:
     # pull_standalone actually returns one: filename -> created/updated/unchanged/deleted,
     # plus `attachments/...` keys for images (created/deleted, or "failed").
     standalone: dict[str, str] = field(default_factory=dict)
+    # Filled from client.memory.pull()'s return value: "{org_id}{path}" -> created/updated/
+    # unchanged/deleted, or failed/rejected (see _MEMORY_FAILED_STATUSES).
+    memory: dict[str, str] = field(default_factory=dict)
 
     @property
     def standalone_conversations(self) -> int:
@@ -179,9 +195,9 @@ def _retry_failed_projects(
 
 
 def backup_account(account: Account, out_root: str | Path, *, prune: bool = False) -> BackupReport:
-    """Back up every project, plus every standalone conversation, in this account.
+    """Back up every project, every standalone conversation and the memory files of this account.
 
-    Both calls share one try/except deliberately: a total failure in either (not a
+    All three calls share one try/except deliberately: a total failure in either (not a
     per-project/per-conversation failure — those are already isolated inside the SDK —
     but e.g. disk full) fails the whole account for this run rather than half-completing
     it, matching the existing all-or-nothing granularity for a single account.
@@ -195,6 +211,9 @@ def backup_account(account: Account, out_root: str | Path, *, prune: bool = Fals
         results = _retry_failed_projects(client, out_dir, prune=prune, results=results)
         report.standalone = _retry_with_backoff(
             lambda: client.conversations.pull_standalone(out_dir / "conversations", prune=prune)
+        )
+        report.memory = _retry_with_backoff(
+            lambda: client.memory.pull(out_dir / _MEMORY_DIR, prune=prune)
         )
     except AuthError as exc:
         logger.error("Account '%s': auth failed: %s", account.slug, exc)
@@ -218,7 +237,20 @@ def backup_account(account: Account, out_root: str | Path, *, prune: bool = Fals
             report.failures.append(label)
 
     report.failures += _failed_attachments(account.slug, out_dir, report.standalone)
+    report.failures += _failed_memory(account.slug, report.memory)
     return report
+
+
+def _failed_memory(account_slug: str, memory: dict[str, str]) -> list[str]:
+    """One failure label per memory file that failed to read or was rejected this run."""
+    failures = [
+        f"{account_slug}/{_MEMORY_DIR}/{key}: {status}"
+        for key, status in sorted(memory.items())
+        if status in _MEMORY_FAILED_STATUSES
+    ]
+    for failure in failures:
+        logger.error("Failed to back up %s", failure)
+    return failures
 
 
 def _failed_attachments(account_slug: str, out_dir: Path, standalone: dict[str, str]) -> list[str]:
@@ -457,11 +489,13 @@ def run_backup(
     all_failures: list[str] = []
     total_backed_up = 0
     total_standalone = 0
+    total_memory = 0
     total_pruned = 0
     for account in accounts:
         report = backup_account(account, out_dir, prune=prune)
         total_backed_up += len(report.backed_up)
         total_standalone += report.standalone_conversations
+        total_memory += sum(1 for status in report.memory.values() if status in _MEMORY_OK_STATUSES)
         all_failures.extend(report.failures)
 
         if reconcile:
@@ -482,9 +516,11 @@ def run_backup(
         return 1
 
     logger.info(
-        "Backup complete: %d project(s), %d standalone conversation(s) across %d account(s)%s.",
+        "Backup complete: %d project(s), %d standalone conversation(s), %d memory file(s) "
+        "across %d account(s)%s.",
         total_backed_up,
         total_standalone,
+        total_memory,
         len(accounts),
         f", {total_pruned} orphan(s) reconciled" if reconcile else "",
     )
