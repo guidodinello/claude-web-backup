@@ -17,7 +17,7 @@ dependencies = [
 # branch's latest, so it won't silently pick up new commits. Both track main; bump
 # with `uv lock --upgrade-package <name>` when the sibling repo changes and you want
 # the update here.
-claude-client = { git = "https://github.com/guidodinello/claude-client", branch = "main" }
+claude-client = { git = "https://github.com/guidodinello/claude-client", branch = "feat/melange-memory" }
 logger = { git = "https://github.com/guidodinello/logger", branch = "main" }
 
 [project.scripts]

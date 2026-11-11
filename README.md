@@ -37,9 +37,22 @@ $CLAUDE_BACKUP_DIR/
       docs/                # knowledge files
       conversations/        # one .md per conversation in this project
         attachments/{conversation-uuid}/   # that conversation's images, same as above
+    memory/
+      {org-uuid}/            # Claude.ai memory files, mirrored verbatim by their remote path
+        profile.md, preferences.md, topics/, people/, areas/
+        projects/{project-uuid}/index.md, overview.md, ...
   work/
     {project-slug}/ ...
 ```
+
+Memory: Claude.ai moved memory to per-entry files (the Memory panel's list) on
+2026-09-24. They're account-wide and path-addressed, so they're mirrored under
+`memory/{org-uuid}/` by `client.memory.pull`, not inside each project dir. Project
+entries keep the project uuid in their path. The `## Memory` section in each
+`project.md` comes from the old single-blob endpoint; for migrated projects it's labelled
+a frozen pre-migration snapshot. A memory file that fails to download, or whose path
+claude-client rejects as unsafe, counts as a failure (exit 1). `--reconcile` never
+touches `memory/`, since its own pull keeps a manifest and prunes it.
 
 Note: a project literally named "Conversations" would slugify to `{project-slug}` =
 `conversations`, colliding with the reserved account-level directory above (claude-client's
