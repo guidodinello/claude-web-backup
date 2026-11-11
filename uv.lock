@@ -96,7 +96,7 @@ wheels = [
 [[package]]
 name = "claude-client"
 version = "0.1.0"
-source = { git = "https://github.com/guidodinello/claude-client?branch=feat%2Fmelange-memory#84d5234280b7ae0149bd0bbedcf805877372077e" }
+source = { git = "https://github.com/guidodinello/claude-client?branch=main#0c242b75413e59cba0dc601d1ed2e61d433abf08" }
 dependencies = [
     { name = "curl-cffi" },
     { name = "logger" },
@@ -122,7 +122,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "claude-client", git = "https://github.com/guidodinello/claude-client?branch=feat%2Fmelange-memory" },
+    { name = "claude-client", git = "https://github.com/guidodinello/claude-client?branch=main" },
     { name = "curl-cffi" },
     { name = "logger", git = "https://github.com/guidodinello/logger?branch=main" },
 ]
