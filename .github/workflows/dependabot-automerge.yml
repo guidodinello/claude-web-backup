@@ -7,7 +7,7 @@
 # App configured, this workflow degrades gracefully: it reports "not
 # configured" and leaves the PR for a manual merge, rather than failing.
 #
-# Adopt: cp to .github/workflows/dependabot-automerge.yml. Fully generic,
+# Rendered by dev-standards' init.py, verbatim. Fully generic,
 # no per-repo edits needed — the App ID/key come from secrets, not this file.
 name: Dependabot auto-merge
 
@@ -26,10 +26,6 @@ permissions:
   pull-requests: read # fetch-metadata reads the PR's details
 
 jobs:
-<<<<<<< before updating
-  auto-merge:
-    # Same CI_RUNNERS switch as templates/ci/python-ci.yml (see README § CI runners) —
-=======
   # secrets-outside-env is ignored: a Dependabot-triggered pull_request run gets only
   # Dependabot secrets ("GitHub Actions secrets are not available", docs.github.com/en/
   # code-security/reference/supply-chain-security/dependabot-on-actions). Environment
@@ -38,7 +34,6 @@ jobs:
   auto-merge: # zizmor: ignore[secrets-outside-env] Dependabot runs get no environment secrets
     name: Auto-merge
     # Same CI_RUNNERS switch as the CI workflow (see dev-standards' README § CI runners) —
->>>>>>> after updating
     # a private repo's GitHub-hosted minutes running out blocks this job exactly like
     # any other, and it isn't a required check, so an offline self-hosted runner only
     # delays a merge rather than blocking one.
@@ -53,7 +48,7 @@ jobs:
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
-        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
 
       # A merge made with GITHUB_TOKEN triggers no further workflow runs — GitHub
       # suppresses that to prevent a workflow from triggering itself in an infinite loop.
